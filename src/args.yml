@@ -1,0 +1,91 @@
+name: ski
+about: Ski Rust Reference Client
+author: Graham Northup <grissess@nexusg.org>
+version: "0.1-20200629"
+before_help: This software HAS NOT BEEN VERIFIED by any third party. Use at your own risk.
+subcommands:
+    - encode:
+        about: Encode a file to standard out
+        args:
+            - FILE:
+                help: File to encode (default standard in)
+                index: 1
+    - decode:
+        about: Decode a file to standard out
+        args:
+            - FILE:
+                help: File to encode (default standard in)
+                index: 1
+    - key:
+        about: Manipulate keys and en/decipher data
+        subcommands:
+            - gen:
+                about: Generate a new private key and write it to stdout
+            - pub:
+                about: Convert a private key to a public key
+                args:
+                    - KEY:
+                        help: SKI private key URI
+                        required: true
+                        index: 1
+            - shared:
+                about: Create a shared key from a private and public key
+                args:
+                    - PRIVKEY:
+                        help: SKI private key URI
+                        required: true
+                        index: 1
+                    - PUBKEY:
+                        help: SKI public key URI
+                        required: true
+                        index: 2
+            - derive:
+                about: Create a new random symmetric key and encrypt it with a shared key
+                args:
+                    - PRIVKEY:
+                        help: SKI private key URI
+                        required: true
+                        index: 1
+                    - PUBKEY:
+                        help: SKI publik key URI
+                        required: true
+                        index: 2
+            - encrypt:
+                about: Encrypt data with a key, writing the ciphertext to stdout
+                args:
+                    - FILE:
+                        help: Plaintext file to read (default standard in)
+                        index: 1
+            - decrypt:
+                about: Decrypt data with a key, writing the plaintext to stdout
+                args:
+                    - FILE:
+                        help: Ciphertext file to read (default standard in)
+                        index: 1
+    - sym:
+        about: Perform symmetric encryption
+        subcommands:
+            - gen:
+                about: Make a new random key and write it to stdout
+            - derive:
+                about: Create a symmetric key from repeatably some input (e.g., a password)
+            - encrypt:
+                about: Symmetrically encrypt a file to stdout
+                args:
+                    - KEY:
+                        help: SKI symmetric key URI
+                        required: true
+                        index: 1
+                    - FILE:
+                        help: File to read (default stdin)
+                        index: 2
+            - decrypt:
+                about: Symmetrically decrypt a file to stdout
+                args:
+                    - KEY:
+                        help: SKI symmetric key URI
+                        required: true
+                        index: 1
+                    - FILE:
+                        help: File to read (default stdin)
+                        index: 2
