@@ -72,6 +72,9 @@ subcommands:
             - encrypt:
                 about: Symmetrically encrypt a file to stdout
                 args:
+                    - ascii:
+                        short: a
+                        help: Generate 7-bit-safe output
                     - KEY:
                         help: SKI symmetric key URI
                         required: true
@@ -82,6 +85,9 @@ subcommands:
             - decrypt:
                 about: Symmetrically decrypt a file to stdout
                 args:
+                    - ascii:
+                        short: a
+                        help: Assume input was made with encrypt -a
                     - KEY:
                         help: SKI symmetric key URI
                         required: true

@@ -109,7 +109,12 @@ fn main() {
                     input.read_to_end(&mut buffer).unwrap();
                     let cipher = key.cipher();
                     let data = cipher.encipher(&buffer);
-                    io::stdout().write_all(&data.encode().as_binary().unwrap()).unwrap();
+                    let output = if args.is_present("ascii") {
+                        data.encode().as_uri().into_bytes()
+                    } else {
+                        data.encode().as_binary().unwrap()
+                    };
+                    io::stdout().write_all(&output).unwrap();
                     0
                 },
 
@@ -120,9 +125,15 @@ fn main() {
                     let mut input = get_input(args.value_of_os("FILE")).unwrap();
                     let mut buffer: Vec<u8> = Vec::new();
                     input.read_to_end(&mut buffer).unwrap();
-                    let data = sym::EncipheredData::decode(
-                        &CodedObject::from_binary(&buffer).unwrap()
-                    ).unwrap();
+                    let data = {
+                        let co = if args.is_present("ascii") {
+                            CodedObject::from_uri(std::str::from_utf8(&buffer).unwrap()).unwrap()
+                        } else {
+                            CodedObject::from_binary(&buffer).unwrap()
+                        };
+
+                        sym::EncipheredData::decode(&co).unwrap()
+                    };
                     let cipher = key.cipher_for_data(&data);
                     let plain = cipher.decipher(&data);
                     io::stdout().write_all(&plain).unwrap();
