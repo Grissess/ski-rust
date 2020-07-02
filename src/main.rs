@@ -16,6 +16,7 @@ pub mod key;
 pub mod sym;
 pub mod csrng;
 pub mod kdf;
+pub mod data;
 
 use coding::{Encodable, Decodable, CodedObject};
 
@@ -74,6 +75,54 @@ fn main() {
                     let shkey = privkey.shared_key(&pubkey);
 
                     println!("{}", shkey.encode().as_uri());
+                    0
+                },
+
+                ("encrypt", Some(args)) => {
+                    let privkey = key::Key::decode(
+                        &CodedObject::from_uri(args.value_of("PRIVKEY").unwrap()).unwrap()
+                    ).unwrap();
+                    let pubkey = key::PubKey::decode(
+                        &CodedObject::from_uri(args.value_of("PUBKEY").unwrap()).unwrap()
+                    ).unwrap();
+
+                    let mut buffer: Vec<u8> = Vec::new();
+                    let mut input = get_input(args.value_of_os("FILE")).unwrap();
+                    input.read_to_end(&mut buffer).unwrap();
+
+                    let session = data::Session::from_keys(&privkey, &pubkey);
+                    let ciphertext = session.encrypt(&buffer);
+
+                    let output = if args.is_present("ascii") {
+                        ciphertext.encode().as_uri().into_bytes()
+                    } else {
+                        ciphertext.encode().as_binary().unwrap()
+                    };
+                    io::stdout().write_all(&output).unwrap();
+                    0
+                },
+
+                ("decrypt", Some(args)) => {
+                    let privkey = key::Key::decode(
+                        &CodedObject::from_uri(args.value_of("PRIVKEY").unwrap()).unwrap()
+                    ).unwrap();
+                    let pubkey = key::PubKey::decode(
+                        &CodedObject::from_uri(args.value_of("PUBKEY").unwrap()).unwrap()
+                    ).unwrap();
+
+                    let mut buffer: Vec<u8> = Vec::new();
+                    let mut input = get_input(args.value_of_os("FILE")).unwrap();
+                    input.read_to_end(&mut buffer).unwrap();
+
+                    let session = data::Session::from_keys(&privkey, &pubkey);
+                    let cipher = if args.is_present("ascii") {
+                        CodedObject::from_uri(std::str::from_utf8(&buffer).unwrap()).unwrap()
+                    } else {
+                        CodedObject::from_binary(&buffer).unwrap()
+                    };
+                    let cipher = data::EncryptedData::decode(&cipher).unwrap();
+
+                    io::stdout().write_all(&session.decrypt(&cipher)).unwrap();
                     0
                 },
 

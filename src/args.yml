@@ -39,29 +39,42 @@ subcommands:
                         help: SKI public key URI
                         required: true
                         index: 2
-            - derive:
-                about: Create a new random symmetric key and encrypt it with a shared key
+            - encrypt:
+                about: Encrypt data with a key, writing the ciphertext to stdout
                 args:
+                    - ascii:
+                        short: a
+                        long: ascii
+                        help: Generate 7-bit-safe output
                     - PRIVKEY:
                         help: SKI private key URI
                         required: true
                         index: 1
                     - PUBKEY:
-                        help: SKI publik key URI
+                        help: SKI public key URI
                         required: true
                         index: 2
-            - encrypt:
-                about: Encrypt data with a key, writing the ciphertext to stdout
-                args:
                     - FILE:
                         help: Plaintext file to read (default standard in)
-                        index: 1
+                        index: 3
             - decrypt:
                 about: Decrypt data with a key, writing the plaintext to stdout
                 args:
+                    - ascii:
+                        short: a
+                        long: ascii
+                        help: Assume input is 7-bit-safe (generated with encrypt -a)
+                    - PRIVKEY:
+                        help: SKI private key URI
+                        required: true
+                        index: 1
+                    - PUBKEY:
+                        help: SKI public key URI
+                        required: true
+                        index: 2
                     - FILE:
                         help: Ciphertext file to read (default standard in)
-                        index: 1
+                        index: 3
     - sym:
         about: Perform symmetric encryption
         subcommands:
@@ -87,6 +100,7 @@ subcommands:
                 args:
                     - ascii:
                         short: a
+                        long: ascii
                         help: Assume input was made with encrypt -a
                     - KEY:
                         help: SKI symmetric key URI
