@@ -75,6 +75,30 @@ subcommands:
                     - FILE:
                         help: Ciphertext file to read (default standard in)
                         index: 3
+            - sign:
+                about: Sign data, writing a signature to stdout
+                args:
+                    - PRIVKEY:
+                        help: SKI private key URI
+                        required: true
+                        index: 1
+                    - FILE:
+                        help: Data file to read (default standard in)
+                        index: 2
+            - verify:
+                about: Exit 0 if signature verifies, 1 otherwise
+                args:
+                    - PUBKEY:
+                        help: SKI public key URI
+                        required: true
+                        index: 1
+                    - SIGNATURE:
+                        help: SKI signature URI
+                        required: true
+                        index: 2
+                    - FILE:
+                        help: Data file to read (default standard in)
+                        index: 3
     - sym:
         about: Perform symmetric encryption
         subcommands:

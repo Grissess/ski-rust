@@ -17,6 +17,7 @@ pub mod sym;
 pub mod csrng;
 pub mod kdf;
 pub mod data;
+pub mod sig;
 
 use coding::{Encodable, Decodable, CodedObject};
 
@@ -126,9 +127,44 @@ fn main() {
                     0
                 },
 
+                ("sign", Some(args)) => {
+                    let privkey = key::Key::decode(
+                        &CodedObject::from_uri(args.value_of("PRIVKEY").unwrap()).unwrap()
+                    ).unwrap();
+
+                    let mut buffer: Vec<u8> = Vec::new();
+                    let mut input = get_input(args.value_of_os("FILE")).unwrap();
+                    input.read_to_end(&mut buffer).unwrap();
+
+                    let sig = sig::Signature::sign(&privkey, &buffer);
+                    println!("{}", sig.encode().as_uri());
+                    0
+                },
+
+                ("verify", Some(args)) => {
+                    let pubkey = key::PubKey::decode(
+                        &CodedObject::from_uri(args.value_of("PUBKEY").unwrap()).unwrap()
+                    ).unwrap();
+                    let sig = sig::Signature::decode(
+                        &CodedObject::from_uri(args.value_of("SIGNATURE").unwrap()).unwrap()
+                    ).unwrap();
+
+                    let mut buffer: Vec<u8> = Vec::new();
+                    let mut input = get_input(args.value_of_os("FILE")).unwrap();
+                    input.read_to_end(&mut buffer).unwrap();
+
+                    if sig.verify(&pubkey, &buffer) {
+                        println!("success");
+                        0
+                    } else {
+                        println!("failed");
+                        1
+                    }
+                },
+
                 _ => {
                     eprintln!("{}", args.usage());
-                    1
+                    2
                 },
             }
         },
@@ -191,14 +227,14 @@ fn main() {
 
                 _ => {
                     eprintln!("{}", args.usage());
-                    1
+                    2
                 },
             }
         },
 
         _ => {
             eprintln!("{}", matches.usage());
-            1
+            2
         },
     })
 }
