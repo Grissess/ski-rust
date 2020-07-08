@@ -28,23 +28,36 @@ fn get_input(filename: Option<&OsStr>) -> io::Result<Box<dyn io::Read>> {
     }
 }
 
+fn read_all_input(filename: Option<&OsStr>) -> io::Result<Vec<u8>> {
+    let mut buffer = Vec::new();
+    let mut input = get_input(filename)?;
+    input.read_to_end(&mut buffer)?;
+    Ok(buffer)
+}
+
+fn from_arg<T: Decodable, S: AsRef<str> + Clone>(args: &clap::ArgMatches, name: S) -> error::Result<T> where String: From<S> {
+    T::decode(
+        &CodedObject::from_uri(
+            args
+                .value_of(name.clone())
+                .ok_or_else(|| error::Error::MissingArgument(String::from(name)))?
+        )?
+    )
+}
+
 fn main() {
     let arg_config = load_yaml!("args.yml");
     let matches = clap::App::from_yaml(arg_config).get_matches();
 
     std::process::exit(match matches.subcommand() {
         ("encode", Some(args)) => {
-            let mut input = get_input(args.value_of_os("FILE")).unwrap();
-            let mut buffer: Vec<u8> = Vec::new();
-            input.read_to_end(&mut buffer).unwrap();
+            let buffer = read_all_input(args.value_of_os("FILE")).unwrap();
             io::stdout().write_all(coding::encode(buffer).as_bytes()).unwrap();
             0
         },
 
         ("decode", Some(args)) => {
-            let mut input = get_input(args.value_of_os("FILE")).unwrap();
-            let mut buffer: Vec<u8> = Vec::new();
-            input.read_to_end(&mut buffer).unwrap();
+            let buffer = read_all_input(args.value_of_os("FILE")).unwrap();
             io::stdout().write_all(&coding::decode(buffer).unwrap()).unwrap();
             0
         },
@@ -57,21 +70,15 @@ fn main() {
                 },
 
                 ("pub", Some(args)) => {
-                    let key = key::Key::decode(
-                        &CodedObject::from_uri(args.value_of("KEY").unwrap()).unwrap()
-                    ).unwrap();
+                    let key: key::Key = from_arg(args, "KEY").unwrap();
 
                     println!("{}", key.public().encode().as_uri());
                     0
                 },
 
                 ("shared", Some(args)) => {
-                    let privkey = key::Key::decode(
-                        &CodedObject::from_uri(args.value_of("PRIVKEY").unwrap()).unwrap()
-                    ).unwrap();
-                    let pubkey = key::PubKey::decode(
-                        &CodedObject::from_uri(args.value_of("PUBKEY").unwrap()).unwrap()
-                    ).unwrap();
+                    let privkey: key::Key = from_arg(args, "PRIVKEY").unwrap();
+                    let pubkey: key::PubKey = from_arg(args, "PUBKEY").unwrap();
 
                     let shkey = privkey.shared_key(&pubkey);
 
@@ -80,16 +87,10 @@ fn main() {
                 },
 
                 ("encrypt", Some(args)) => {
-                    let privkey = key::Key::decode(
-                        &CodedObject::from_uri(args.value_of("PRIVKEY").unwrap()).unwrap()
-                    ).unwrap();
-                    let pubkey = key::PubKey::decode(
-                        &CodedObject::from_uri(args.value_of("PUBKEY").unwrap()).unwrap()
-                    ).unwrap();
+                    let privkey: key::Key = from_arg(args, "PRIVKEY").unwrap();
+                    let pubkey: key::PubKey = from_arg(args, "PUBKEY").unwrap();
 
-                    let mut buffer: Vec<u8> = Vec::new();
-                    let mut input = get_input(args.value_of_os("FILE")).unwrap();
-                    input.read_to_end(&mut buffer).unwrap();
+                    let buffer = read_all_input(args.value_of_os("FILE")).unwrap();
 
                     let session = data::Session::from_keys(&privkey, &pubkey);
                     let ciphertext = session.encrypt(&buffer);
@@ -104,16 +105,10 @@ fn main() {
                 },
 
                 ("decrypt", Some(args)) => {
-                    let privkey = key::Key::decode(
-                        &CodedObject::from_uri(args.value_of("PRIVKEY").unwrap()).unwrap()
-                    ).unwrap();
-                    let pubkey = key::PubKey::decode(
-                        &CodedObject::from_uri(args.value_of("PUBKEY").unwrap()).unwrap()
-                    ).unwrap();
+                    let privkey: key::Key = from_arg(args, "PRIVKEY").unwrap();
+                    let pubkey: key::PubKey = from_arg(args, "PUBKEY").unwrap();
 
-                    let mut buffer: Vec<u8> = Vec::new();
-                    let mut input = get_input(args.value_of_os("FILE")).unwrap();
-                    input.read_to_end(&mut buffer).unwrap();
+                    let buffer = read_all_input(args.value_of_os("FILE")).unwrap();
 
                     let session = data::Session::from_keys(&privkey, &pubkey);
                     let cipher = if args.is_present("ascii") {
@@ -128,37 +123,43 @@ fn main() {
                 },
 
                 ("sign", Some(args)) => {
-                    let privkey = key::Key::decode(
-                        &CodedObject::from_uri(args.value_of("PRIVKEY").unwrap()).unwrap()
-                    ).unwrap();
+                    let privkey: key::Key = from_arg(args, "PRIVKEY").unwrap();
 
-                    let mut buffer: Vec<u8> = Vec::new();
-                    let mut input = get_input(args.value_of_os("FILE")).unwrap();
-                    input.read_to_end(&mut buffer).unwrap();
+                    let buffer = read_all_input(args.value_of_os("FILE")).unwrap();
 
                     let sig = sig::Signature::sign(&privkey, &buffer);
+
+                    if args.is_present("why") {
+                        eprintln!("{:?}", sig.hash().as_ref().unwrap());
+                    }
+
                     println!("{}", sig.encode().as_uri());
                     0
                 },
 
                 ("verify", Some(args)) => {
-                    let pubkey = key::PubKey::decode(
-                        &CodedObject::from_uri(args.value_of("PUBKEY").unwrap()).unwrap()
-                    ).unwrap();
-                    let sig = sig::Signature::decode(
-                        &CodedObject::from_uri(args.value_of("SIGNATURE").unwrap()).unwrap()
-                    ).unwrap();
+                    let pubkey: key::PubKey = from_arg(args, "PUBKEY").unwrap();
+                    let sig: sig::Signature = from_arg(args, "SIGNATURE").unwrap();
 
-                    let mut buffer: Vec<u8> = Vec::new();
-                    let mut input = get_input(args.value_of_os("FILE")).unwrap();
-                    input.read_to_end(&mut buffer).unwrap();
+                    let buffer = read_all_input(args.value_of_os("FILE")).unwrap();
 
-                    if sig.verify(&pubkey, &buffer) {
-                        println!("success");
-                        0
+                    if args.is_present("why") {
+                        let reason = sig.verify_reason(&pubkey, &buffer);
+                        if let Some(err) = reason {
+                            println!("failed: {:?}", err);
+                            1
+                        } else {
+                            println!("success");
+                            0
+                        }
                     } else {
-                        println!("failed");
-                        1
+                        if sig.verify(&pubkey, &buffer) {
+                            println!("success");
+                            0
+                        } else {
+                            println!("failed");
+                            1
+                        }
                     }
                 },
 
@@ -186,12 +187,10 @@ fn main() {
                 },
 
                 ("encrypt", Some(args)) => {
-                    let key = sym::Key::decode(
-                        &CodedObject::from_uri(args.value_of("KEY").unwrap()).unwrap()
-                    ).unwrap();
-                    let mut input = get_input(args.value_of_os("FILE")).unwrap();
-                    let mut buffer: Vec<u8> = Vec::new();
-                    input.read_to_end(&mut buffer).unwrap();
+                    let key: sym::Key = from_arg(args, "KEY").unwrap();
+
+                    let buffer = read_all_input(args.value_of_os("FILE")).unwrap();
+
                     let cipher = key.cipher();
                     let data = cipher.encipher(&buffer);
                     let output = if args.is_present("ascii") {
@@ -204,12 +203,10 @@ fn main() {
                 },
 
                 ("decrypt", Some(args)) => {
-                    let key = sym::Key::decode(
-                        &CodedObject::from_uri(args.value_of("KEY").unwrap()).unwrap()
-                    ).unwrap();
-                    let mut input = get_input(args.value_of_os("FILE")).unwrap();
-                    let mut buffer: Vec<u8> = Vec::new();
-                    input.read_to_end(&mut buffer).unwrap();
+                    let key: sym::Key = from_arg(args, "KEY").unwrap();
+
+                    let buffer = read_all_input(args.value_of_os("FILE")).unwrap();
+
                     let data = {
                         let co = if args.is_present("ascii") {
                             CodedObject::from_uri(std::str::from_utf8(&buffer).unwrap()).unwrap()

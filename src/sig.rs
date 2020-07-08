@@ -3,6 +3,8 @@ use crate::coding::{Encodable, Decodable, CodedObject};
 use crate::key::{Key, PubKey};
 use crate::csrng::fill_random;
 
+use std::fmt;
+
 use crypto::curve25519::{ge_scalarmult_base, sc_reduce, sc_muladd, GeP3, GeP2};
 use crypto::sha2::Sha512;
 use crypto::digest::Digest;
@@ -47,13 +49,44 @@ pub fn ct_zero(data: &[u8]) -> bool {
 pub struct Signature {
     pub nonce_pt: [u8; 32],
     pub signature: [u8; 32],
+    hash: Option<Hash>,
 }
 
 pub type SignatureHash = Sha512;
 pub const SIG_HASH_SIZE: usize = 64;
 
+pub struct Hash([u8; SIG_HASH_SIZE]);
+
+impl Clone for Hash {
+    fn clone(&self) -> Hash {
+        let mut new = [0u8; SIG_HASH_SIZE];
+        new.copy_from_slice(&self.0[..]);
+        Hash(new)
+    }
+}
+
+impl fmt::Debug for Hash {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_tuple("Hash")
+            .field(&&self.0[..])
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum VerificationError {
+    NotInField([u8; 32]),
+    InvalidKey([u8; 32]),
+    ZeroKey,
+    BadSignature([u8; 32], [u8; 32], Hash),
+}
+
 impl Signature {
-    pub fn sign_with_nonce(key: &Key, data: &[u8], nonce: [u8; 32]) -> Signature {
+    pub fn sign_with_nonce(key: &Key, data: &[u8], nonce: [u8; 32]) -> error::Result<Signature> {
+        if nonce[31] & 128 != 0 {
+            return Err(error::Error::BadNonce(nonce));
+        }
+
         let nonce_pt = ge_scalarmult_base(&nonce).to_bytes();
         let mut hasher = SignatureHash::new();
         let pubkey = key.public();
@@ -66,26 +99,31 @@ impl Signature {
 
         let mut signature = [0u8; 32];
         sc_muladd(&mut signature, &digest[0..32], &key.bytes, &nonce);
-        Signature {
-            nonce_pt, signature
-        }
+        Ok(Signature {
+            nonce_pt, signature, hash: Some(Hash(digest)),
+        })
     }
 
     pub fn sign(key: &Key, data: &[u8]) -> Signature {
         let mut nonce = [0u8; 32];
         fill_random(&mut nonce);
-        Signature::sign_with_nonce(key, data, nonce)
+        nonce[31] &= 127;
+        Signature::sign_with_nonce(key, data, nonce).unwrap()
     }
 
-    pub fn verify(&self, key: &PubKey, data: &[u8]) -> bool {
-        if check_s_lt_l(&self.signature) { return false; }
+    pub fn hash(&self) -> &Option<Hash> { &self.hash }
+
+    pub fn verify_reason(&self, key: &PubKey, data: &[u8]) -> Option<VerificationError> {
+        use VerificationError::*;
+
+        if check_s_lt_l(&self.signature) { return Some(NotInField(self.signature.clone())); }
 
         let gp = match GeP3::from_bytes_negate_vartime(&key.bytes) {
             Some(g) => g,
-            None => return false,
+            None => return Some(InvalidKey(key.bytes.clone())),
         };
 
-        if ct_zero(&key.bytes) { return false; }
+        if ct_zero(&key.bytes) { return Some(ZeroKey); }
 
         let mut hasher = SignatureHash::new();
         hasher.input(&self.nonce_pt);
@@ -96,7 +134,15 @@ impl Signature {
         sc_reduce(&mut digest);
 
         let r = GeP2::double_scalarmult_vartime(&digest[0..32], gp, &self.signature);
-        fixed_time_eq(r.to_bytes().as_ref(), &self.nonce_pt)
+        if fixed_time_eq(r.to_bytes().as_ref(), &self.nonce_pt) {
+            None
+        } else {
+            Some(BadSignature(r.to_bytes(), self.nonce_pt.clone(), Hash(digest)))
+        }
+    }
+
+    pub fn verify(&self, key: &PubKey, data: &[u8]) -> bool {
+        self.verify_reason(key, data).is_none()
     }
 }
 
@@ -121,6 +167,6 @@ impl Decodable for Signature {
         let mut signature = [0u8; 32];
         nonce_pt.copy_from_slice(&input.bytes[0..32]);
         signature.copy_from_slice(&input.bytes[32..64]);
-        Ok(Signature { nonce_pt, signature })
+        Ok(Signature { nonce_pt, signature, hash: None })
     }
 }

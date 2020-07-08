@@ -5,6 +5,8 @@ pub enum Error {
     BadScheme(String),
     BadEncoding(std::str::Utf8Error),
     SchemeTooLong(std::num::TryFromIntError),
+    MissingArgument(String),
+    BadNonce([u8; 32]),
 }
 
 impl From<base64::DecodeError> for Error {

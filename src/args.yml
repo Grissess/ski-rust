@@ -78,6 +78,9 @@ subcommands:
             - sign:
                 about: Sign data, writing a signature to stdout
                 args:
+                    - why:
+                        long: why
+                        help: Emit data which can be useful for verify --why (unsafe in general; use only for diagnostics)
                     - PRIVKEY:
                         help: SKI private key URI
                         required: true
@@ -88,6 +91,9 @@ subcommands:
             - verify:
                 about: Exit 0 if signature verifies, 1 otherwise
                 args:
+                    - why:
+                        long: why
+                        help: Say why the verification failed (unsafe in general; use only for diagnostics)
                     - PUBKEY:
                         help: SKI public key URI
                         required: true
