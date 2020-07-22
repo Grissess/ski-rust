@@ -65,7 +65,7 @@ impl From<SharedKey> for Session {
     }
 }
 
-pub const ENCRYPTED_DATA_SCHEME: &'static str = "ski-encr";
+pub const ENCRYPTED_DATA_SCHEME: &'static str = "ski:encr";
 
 impl Encodable for EncryptedData {
     fn encode(&self) -> CodedObject {

@@ -37,7 +37,7 @@ fn read_all_input(filename: Option<&OsStr>) -> io::Result<Vec<u8>> {
 
 fn from_arg<T: Decodable, S: AsRef<str> + Clone>(args: &clap::ArgMatches, name: S) -> error::Result<T> where String: From<S> {
     T::decode(
-        &CodedObject::from_uri(
+        &CodedObject::from_urn(
             args
                 .value_of(name.clone())
                 .ok_or_else(|| error::Error::MissingArgument(String::from(name)))?
@@ -65,14 +65,14 @@ fn main() {
         ("key", Some(args)) => {
             match args.subcommand() {
                 ("gen", Some(_args)) => {
-                    println!("{}", key::Key::new().encode().as_uri());
+                    println!("{}", key::Key::new().encode().as_urn());
                     0
                 },
 
                 ("pub", Some(args)) => {
                     let key: key::Key = from_arg(args, "KEY").unwrap();
 
-                    println!("{}", key.public().encode().as_uri());
+                    println!("{}", key.public().encode().as_urn());
                     0
                 },
 
@@ -82,7 +82,7 @@ fn main() {
 
                     let shkey = privkey.shared_key(&pubkey);
 
-                    println!("{}", shkey.encode().as_uri());
+                    println!("{}", shkey.encode().as_urn());
                     0
                 },
 
@@ -96,7 +96,7 @@ fn main() {
                     let ciphertext = session.encrypt(&buffer);
 
                     let output = if args.is_present("ascii") {
-                        ciphertext.encode().as_uri().into_bytes()
+                        ciphertext.encode().as_urn().into_bytes()
                     } else {
                         ciphertext.encode().as_binary().unwrap()
                     };
@@ -112,7 +112,7 @@ fn main() {
 
                     let session = data::Session::from_keys(&privkey, &pubkey);
                     let cipher = if args.is_present("ascii") {
-                        CodedObject::from_uri(std::str::from_utf8(&buffer).unwrap()).unwrap()
+                        CodedObject::from_urn(std::str::from_utf8(&buffer).unwrap()).unwrap()
                     } else {
                         CodedObject::from_binary(&buffer).unwrap()
                     };
@@ -127,13 +127,17 @@ fn main() {
 
                     let buffer = read_all_input(args.value_of_os("FILE")).unwrap();
 
-                    let sig = sig::Signature::sign(&privkey, &buffer);
+                    let sig = if args.is_present("random") {
+                        sig::Signature::sign_random(&privkey, &buffer)
+                    } else {
+                        sig::Signature::sign_deterministic(&privkey, &buffer)
+                    };
 
                     if args.is_present("why") {
                         eprintln!("{:?}", sig.hash().as_ref().unwrap());
                     }
 
-                    println!("{}", sig.encode().as_uri());
+                    println!("{}", sig.encode().as_urn());
                     0
                 },
 
@@ -173,7 +177,7 @@ fn main() {
         ("sym", Some(args)) => {
             match args.subcommand() {
                 ("gen", Some(_args)) => {
-                    println!("{}", sym::Key::new().encode().as_uri());
+                    println!("{}", sym::Key::new().encode().as_urn());
                     0
                 },
 
@@ -182,7 +186,7 @@ fn main() {
                     let hasher = kdf::KeyDerivation::new();
                     let mut output = [0u8; sym::Key::SIZE];
                     hasher.hash(pass.as_bytes(), &mut output);
-                    println!("{}", (sym::Key { bytes: output }).encode().as_uri());
+                    println!("{}", (sym::Key { bytes: output }).encode().as_urn());
                     0
                 },
 
@@ -194,7 +198,7 @@ fn main() {
                     let cipher = key.cipher();
                     let data = cipher.encipher(&buffer);
                     let output = if args.is_present("ascii") {
-                        data.encode().as_uri().into_bytes()
+                        data.encode().as_urn().into_bytes()
                     } else {
                         data.encode().as_binary().unwrap()
                     };
@@ -209,7 +213,7 @@ fn main() {
 
                     let data = {
                         let co = if args.is_present("ascii") {
-                            CodedObject::from_uri(std::str::from_utf8(&buffer).unwrap()).unwrap()
+                            CodedObject::from_urn(std::str::from_utf8(&buffer).unwrap()).unwrap()
                         } else {
                             CodedObject::from_binary(&buffer).unwrap()
                         };

@@ -18,8 +18,8 @@ pub struct CodedObject {
 }
 
 impl CodedObject {
-    pub fn as_uri(&self) -> String {
-        format!("{}:{}", self.scheme, encode(&self.bytes))
+    pub fn as_urn(&self) -> String {
+        format!("urn:{}:{}", self.scheme, encode(&self.bytes))
     }
 
     pub fn as_binary(&self) -> error::Result<Vec<u8>> {
@@ -30,14 +30,17 @@ impl CodedObject {
         Ok(output)
     }
 
-    pub fn from_uri(uri: &str) -> error::Result<CodedObject> {
-        let colon = uri.find(':');
-        match colon {
+    pub fn from_urn(urn: &str) -> error::Result<CodedObject> {
+        let last_colon = urn.rfind(':');
+        match last_colon {
             None => Err(Error::BadScheme("".into())),
-            Some(idx) => Ok(CodedObject {
-                scheme: uri[..idx].into(),
-                bytes: decode(uri[idx+1..].as_bytes())?,
-            }),
+            Some(idx) => {
+                let first_colon = urn.find(':').unwrap();  // There's definitely SOME colon in this branch
+                Ok(CodedObject {
+                    scheme: urn[first_colon+1..idx].into(),
+                    bytes: decode(urn[idx+1..].as_bytes())?,
+                })
+            },
         }
     }
 

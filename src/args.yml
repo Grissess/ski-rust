@@ -81,6 +81,10 @@ subcommands:
                     - why:
                         long: why
                         help: Emit data which can be useful for verify --why (unsafe in general; use only for diagnostics)
+                    - random:
+                        short: r
+                        long: random
+                        help: Use a random preimage nonce instead of a deterministic one
                     - PRIVKEY:
                         help: SKI private key URI
                         required: true

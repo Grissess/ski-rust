@@ -104,9 +104,22 @@ impl Signature {
         })
     }
 
-    pub fn sign(key: &Key, data: &[u8]) -> Signature {
+    pub fn sign_random(key: &Key, data: &[u8]) -> Signature {
         let mut nonce = [0u8; 32];
         fill_random(&mut nonce);
+        nonce[31] &= 127;
+        Signature::sign_with_nonce(key, data, nonce).unwrap()
+    }
+
+    pub fn sign_deterministic(key: &Key, data: &[u8]) -> Signature {
+        let mut hasher = SignatureHash::new();
+        hasher.input(&key.bytes);
+        hasher.input(&data);
+        let mut digest = [0u8; SIG_HASH_SIZE];
+        hasher.result(&mut digest);
+
+        let mut nonce = [0u8; 32];
+        nonce.copy_from_slice(&digest[..32]);
         nonce[31] &= 127;
         Signature::sign_with_nonce(key, data, nonce).unwrap()
     }
@@ -146,7 +159,7 @@ impl Signature {
     }
 }
 
-pub const SIGNATURE_SCHEME: &'static str = "ski-sign";
+pub const SIGNATURE_SCHEME: &'static str = "ski:sign";
 
 impl Encodable for Signature {
     fn encode(&self) -> CodedObject {

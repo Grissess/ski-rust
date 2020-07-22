@@ -68,8 +68,8 @@ impl Cipher {
     }
 }
 
-pub const SYMMETRIC_KEY_SCHEME: &'static str = "ski-symk";
-pub const SYMMETRICALLY_ENCRYPTED_DATA_SCHEME: &'static str = "ski-syed";
+pub const SYMMETRIC_KEY_SCHEME: &'static str = "ski:symk";
+pub const SYMMETRICALLY_ENCRYPTED_DATA_SCHEME: &'static str = "ski:syed";
 
 impl Encodable for Key {
     fn encode(&self) -> CodedObject {

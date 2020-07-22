@@ -70,9 +70,9 @@ impl Key {
     }
 }
 
-pub const PRIVATE_KEY_SCHEME: &'static str = "ski-prvk";
-pub const PUBLIC_KEY_SCHEME: &'static str = "ski-pubk";
-pub const SHARED_KEY_SCHEME: &'static str = "ski-shak";
+pub const PRIVATE_KEY_SCHEME: &'static str = "ski:prvk";
+pub const PUBLIC_KEY_SCHEME: &'static str = "ski:pubk";
+pub const SHARED_KEY_SCHEME: &'static str = "ski:shak";
 
 impl Encodable for Key {
     fn encode(&self) -> CodedObject {
