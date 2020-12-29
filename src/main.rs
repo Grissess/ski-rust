@@ -1,25 +1,14 @@
-extern crate base64;
-extern crate crypto;
+extern crate ski;
+
 #[macro_use]
 extern crate clap;
-extern crate rand;
-extern crate rpassword;
-extern crate argon2rs;
 
 use std::io::{self, Write};
 use std::fs;
 use std::ffi::OsStr;
 
-pub mod error;
-pub mod coding;
-pub mod key;
-pub mod sym;
-pub mod csrng;
-pub mod kdf;
-pub mod data;
-pub mod sig;
-
-use coding::{Encodable, Decodable, CodedObject};
+use ski::*;
+use ski::coding::{Encodable, Decodable, CodedObject};
 
 fn get_input(filename: Option<&OsStr>) -> io::Result<Box<dyn io::Read>> {
     match filename {
