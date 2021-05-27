@@ -23,6 +23,25 @@ you will.
 
 
 
+Ki
+--
+
+As more of a proof of concept than anything, this release comes with the bash
+script `ki`, which can be used for keyring management in a practical setting,
+and which can create "certificates" (signed bindings of a public key and
+identity) as well as "boxes" (cryptographic data, possibly signed, possibly
+encrypted, sent from one ID to another).
+
+There is no install method at the moment, but you can copy it into a directory
+in your $PATH if you would like. Common choices are a personal `bin` dir or
+`/usr/local/bin` (for systemwide access).
+
+`ki` is by-and-large untested and has _absolutely_ no standardization in its
+export formats--for example, it lacks revocation certificates or expiration.
+Nonetheless, it is provided for responsible use and testing.
+
+
+
 Cryptography
 ------------
 

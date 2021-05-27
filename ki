@@ -1,0 +1,1591 @@
+#!/bin/bash
+
+getopt="${GETOPT:-getopt}"
+gdbmtool="${GDBMTOOL:-gdbmtool}"
+ski="${SKI:-ski}"
+
+pubdb="${PUBDB:-$HOME/.ski/pub.db}"
+privdb="${PRIVDB:-$HOME/.ski/priv.db}"
+
+quiet="$QUIET"
+
+fmt() {
+	case "$1" in
+		fatal) printf "\x1b[1;35m* \x1b[m" >&2 ;;
+		err) printf "\x1b[1;31m* \x1b[m" >&2 ;;
+		warn) printf "\x1b[1;33m* \x1b[m" >&2 ;;
+		note) printf "\x1b[1;34m* \x1b[m" >&2 ;;
+		*) echo "Unknown fmt: $1"; exit 2 ;;
+	esac
+	shift
+	echo "$@" >&2
+}
+
+fatal() {
+	local code="${2:-1}"
+	fmt fatal "Unable to continue: $1"
+	exit "$code"
+}
+
+prompt_yn() {
+	if [ -n "$quiet" ]; then
+		fatal "Interactive prompt in QUIET mode."
+	fi
+	printf "Y/N> "
+	local line
+	while true; do
+		if ! read line; then
+			fatal "Read error."
+		fi
+		case "$line" in
+			y*|Y*) return 0 ;;
+			n*|N*) return 1 ;;
+		esac
+		echo "Please enter Y or N."
+	done
+}
+
+is_valid_id() {
+	case "$1" in
+		*?'@'?*.?*) true ;;
+		*) false ;;
+	esac
+}
+
+validate_id() {
+	if ! is_valid_id "$1"; then
+		fmt err "Invalid ID specified; IDs should be in the format of a plausible email address to reduce collisions."
+		sanity_bypass "INVALID_ID"
+	else
+		true
+	fi
+}
+
+is_ski_urn() {
+	if [ -n "$2" ]; then
+		case "$1" in
+			urn:ski:"$2":*) true ;;
+			*) false ;;
+		esac
+	else
+		case "$1" in
+			urn:ski:*:*) true ;;
+			*) false ;;
+		esac
+	fi
+}
+
+ski_urn_scheme() {
+	local value="${1#urn:ski:}"
+	value="${value%%:*}"
+	echo "$value"
+}
+
+# NB: keep the process substitution here instead of using a here string;
+# current ski is very picky about additional newlines in its input stream,
+# which could be considered a bug
+ski_decrypt() {
+	"$ski" sym decrypt -a "$("$ski" sym derive)" <(printf "$1")
+}
+
+ski_encrypt() {
+	"$ski" sym encrypt -a "$("$ski" sym derive)" <(printf "$1")
+}
+
+ski_sign() {
+	"$ski" key sign -r "$1" <(printf "$2")
+}
+
+ski_verify() {
+	"$ski" key verify "$1" "$3" <(printf "$2") > /dev/null
+}
+
+ski_decrypt_prvk() {
+	local redkey="$1"
+	local usage="${2:-Bug: no reason given}"
+
+	while ! is_ski_urn "$redkey" "prvk"; do
+		fmt warn "Please enter your password to decrypt this key ($usage)."
+		redkey="$(ski_decrypt "$1")"
+		if ! is_ski_urn "$redkey" "prvk"; then fmt err "Decryption failed; try again."; fi
+	done
+
+	echo "$redkey"
+}
+
+ski_encrypt_prvk() {
+	local key="$1"
+	while true; do
+		fmt note "Enter the password with which you'd like to encrypt this private key."
+		local kt1="$(ski_encrypt "$key")"
+		fmt note "Enter it again, just to be sure."
+		local rk="$(ski_decrypt "$kt1")"
+		if [ "$rk" = "$key" ]; then
+			echo "$kt1"
+			return
+		else
+			fmt err "Keys didn't match; try again."
+		fi
+	done
+}
+
+cert_make() {
+	local id="$1"
+	local key="$2"
+
+	if ! is_ski_urn "$key" "prvk"; then
+		fmt err "Can't make a cert with $key (not a private key)."
+		return 1
+	fi
+
+	local pubk="$("$ski" key pub "$key")"
+	local cert="$(printf "urn:ki:cert:%s,%s" "$id" "$pubk")"
+	cert="${cert},$(ski_sign "$key" "$cert")"
+	printf "%s" "$cert"
+}
+
+is_cert() {
+	case "$1" in
+		urn:ki:cert:*) true ;;
+		*) false ;;
+	esac
+}
+
+cert_get_parts() {
+	if ! is_cert "$1"; then return 1; fi
+	local id key sig rest
+	IFS=',' read -r id key sig rest <<< "${1#urn:ki:cert:}"
+	if [ -n "$rest" ]; then return 1; fi
+	printf "%q %q %q" "$id" "$key" "$sig"
+}
+
+cert_verify() {
+	local parts=( $(cert_get_parts "$1") )
+	if [ "$?" -ne 0 ]; then
+		fmt err "Failed to get parts of cert $1"
+		return 1
+	fi
+	local id="${parts[0]}" key="${parts[1]}" sig="${parts[2]}"
+
+	if ski_verify "$key" "urn:ki:cert:$id,$key" "$sig"; then
+		true
+	else
+		fmt err "Failed to verify $1"
+		false
+	fi
+}
+
+box_make() {
+	local args="$("$getopt" -o '' --long "nosign,noenc" -- "$@")"
+	if [ "$?" -ne 0 ]; then
+		fmt err "box_make couldn't parse args $@"
+		return 1
+	fi
+	eval set -- "$args"
+
+	local nosign=""
+	local noenc=""
+	while true; do
+		case "$1" in
+			'--nosign')
+				nosign="1"
+				shift
+				continue
+				;;
+
+			'--noenc')
+				noenc="1"
+				shift
+				continue
+				;;
+
+			'--')
+				shift
+				break
+				;;
+		esac
+	done
+
+	local from="$1"
+	local to="$2"
+	local dfile="$3"
+
+	if [ -z "$dfile" ]; then
+		fmt err "Can't box stdin (needs a seekable file). Redirect your input to a file (possibly with mktemp) instead."
+		fmt warn "(Devs: This could also happen if you didn't specify enough arguments to box_make.)"
+		return 1
+	fi
+
+	local kfrom kto
+
+	if ! kto="$(db_resolve "$to" "pubk")"; then
+		fmt err "Failed to resolve key for $to."
+		return 1
+	fi
+	if ! kfrom="$(db_resolve "$from" "prvk" "for $from, to make a box")"; then
+		fmt err "Failed to resolve key for $from."
+		return 1
+	fi
+
+	local sig=""
+	if [ -z "$nosign" ]; then
+		sig="$("$ski" key sign "$kfrom" "$dfile")"
+	fi
+
+	local encstat="1"
+	[ -n "$noenc" ] && encstat="0"
+	printf "urn:ki:box:%q,%q,%q,%q\n" "$from" "$to" "$sig" "$encstat"
+	if [ -z "$noenc" ]; then
+		"$ski" key encrypt "$kfrom" "$kto" "$dfile"
+	else
+		cat "$dfile"
+	fi
+}
+
+is_box() {
+	local file="$1"
+	case "$(head -n 1 "$file")" in
+		urn:ki:box:*) true ;;
+		*) false ;;
+	esac
+}
+
+box_get_header() {
+	local file="$1"
+	if ! is_box "$file"; then return 1; fi
+	local line="$(head -n 1 "$file")"
+	line="${line#urn:ki:box:}"
+	local from to sig encstat rest
+	IFS=',' read from to sig encstat rest <<< "$line"
+	if [ -n "$rest" ]; then return 1; fi
+	case "$encstat" in
+		'0'|'1') : ;;
+		*) return 1 ;;
+	esac
+	printf "%q %q %q %q" "$from" "$to" "$sig" "$encstat"
+}
+
+box_unpack() {
+	local boxfile="$1"
+	local outfile="$2"
+
+	local parts=( $(box_get_header "$boxfile") )
+	if [ "$?" -ne 0 ]; then
+		fmt err "Failed to get parts of box $boxfile."
+		return 1
+	fi
+	local from="${parts[0]}" to="${parts[1]}" sig="${parts[2]}" encstat="${parts[3]}"
+	local pubk prvk prvkfrom="to" prvkother="from" sigk=""
+	if ! pubk="$(db_resolve "$from" "pubk")"; then
+		if pubk="$(db_resolve "$to" "pubk")"; then
+			prvkfrom="from"
+			prvkother="to"
+			fmt warn "Reversed address (box was probably made by us)"
+		else
+			fmt err "Couldn't resolve either id to a public key (key missing?):"
+			fmt note "$from"
+			fmt note "$to"
+			return 1
+		fi
+	else
+		sigk="$pubk"
+	fi
+
+	if ! prvk="$(db_resolve "${!prvkfrom}" "prvk" "for ${!prvkfrom}, to unbox")"; then
+		if prvk="$(db_resolve "${!prvkother}" "prvk" "for ${!prvkother}, to unbox")"; then
+			if pubk="$(db_resolve "${!prvkfrom}" "pubk")"; then
+				fmt warn "Address swap; couldn't resolve ${!prvkfrom} as private key, got it from ${!prvkother} instead."
+			else
+				fmt err "Only resolved the private key of ${!prvkother}, but the public key of ${!prvkfrom} is missing--can't unbox without it."
+				return 1
+			fi
+		else
+			fmt err "Couldn't resolve any private key (is this box addressed to you?):"
+			fmt note "$from"
+			fmt note "$to"
+			return 1
+		fi
+	fi
+
+	if [ "$encstat" = "0" ]; then
+		tail -n +2 "$boxfile" > "$outfile"
+	else
+		tail -n +2 "$boxfile" | "$ski" key decrypt "$prvk" "$pubk" > "$outfile"
+	fi
+
+	if [ "$?" -ne 0 ]; then
+		rm "$outfile" 2>/dev/null || true
+		fmt err "Decryption or copy to $outfile failed."
+		return 1
+	fi
+
+	if [ -n "$sig" ]; then
+		if [ -z "$sigk" ]; then
+			fmt err "Signature was included, but couldn't resolve a signing key from $from."
+			if ! sanity_bypass "NO_SIGKEY"; then
+				rm "$outfile" 2>/dev/null || true
+				return 1
+			fi
+		else
+			if ! ski key verify "$sigk" "$sig" "$outfile" > /dev/null; then
+				fmt err "Signature from $from failed to verify."
+				if ! sanity_bypass "BAD_SIG"; then
+					rm "$outfile" 2>/dev/null || true
+					return 1
+				fi
+			else
+				fmt note "Signature verified."
+			fi
+		fi
+	else
+		fmt warn "No signature to verify."
+	fi
+}
+
+sanity_bypass() {
+	local indir="SANITY_$1"
+	[ -n "${!indir}" ]
+	local status="$?"
+	if [ "$status" -ne 0 ]; then
+		fmt note "The previous check can be ignored by setting SANITY_$1 to any non-empty string."
+	else
+		fmt warn "Ignoring the previous check because you asked (SANITY_$1)."
+	fi
+	return "$status"
+}
+
+sanity_ensure_bin() {
+	local bin="$1"
+	local upper="${bin^^*}"
+	local envname="${2:-$upper}"
+	if ! command -v "${!bin}" > /dev/null; then
+		fmt err "$bin executable ${!bin} wasn't found!"
+		fmt err "Make sure $bin is in your PATH (presently $PATH), or set the $envname variable to the full path to its binary."
+		if ! sanity_bypass "NO_$envname"; then fatal "$bin not found."; fi
+	fi
+}
+
+sanity_checks() {
+	sanity_ensure_bin "ski"
+	sanity_ensure_bin "getopt"
+	sanity_ensure_bin "gdbmtool"
+
+	"$getopt" -T
+	if [ "$?" -ne 4 ]; then
+		fmt err "getopt executable $getopt doesn't support extended mode!"
+		fmt err "This can be a security concern, since this script depends on newer getopt's shell-quoting features to avoid unexpected expansions."
+		if ! sanity_bypass "OLD_GETOPT"; then fatal "$getopt unsupported."; fi
+	fi
+}
+
+db_ensure() {
+	local path="$1"
+	local kind="$2"
+	local varname="${3:-${path^^*}}"
+
+	if ! [ -f "${!path}" ]; then
+		fmt note "$kind DB ${!path} doesn't exist; do you want to create it?"
+		if ! prompt_yn; then
+			fatal "Not creating $kind DB."
+		fi
+		mkdir -p "$(dirname "${!path}")"
+		"$gdbmtool" "${!path}" open "${!path}"
+		chmod 0600 "${!path}"
+	fi
+
+	[ -O "${!path}" ] && return
+
+	if [ -r "${!path}" -a -w "${!path}" ]; then
+		fmt err "$kind DB ${!path} exists and is modifiable, but isn't owned by you. This is unsafe."
+		if ! sanity_bypass "${varname}_NOT_OWNED" && ! sanity_bypass "DB_NOT_OWNED"; then fatal "${!path} not owned."; fi
+	else
+		fatal "Cannot read/write $kind DB at ${!path} (set $varname to override)."
+	fi
+
+	local perms="$(stat -c "%a" "${!path}")"
+	if ! [ "$perms" = "600" ]; then
+		fmt err "$kind DB ${!path} has unsafe permissions $perms."
+		if ! sanity_bypass "${varname}_INSECURE" && ! sanity_bypass "DB_INSECURE"; then fatal "${!path} is insecure."; fi
+	fi
+}
+
+db_ensure_pub() { db_ensure "pubdb" "Public"; }
+db_ensure_priv() { db_ensure "privdb" "Private"; }
+
+db_store_pub() {
+	local args="$("$getopt" -o '' --long "overwrite" -- "$@")"
+	if [ "$?" -ne 0 ]; then
+		fmt err "db_store_pub arg parse of $@ failed"
+		return 1
+	fi
+	eval set -- "$args"
+
+	local overwrite=""
+	while true; do
+		case "$1" in
+			'--overwrite')
+				overwrite="1"
+				shift
+				continue
+				;;
+
+			'--')
+				shift
+				break
+				;;
+		esac
+	done
+
+	local name="$1"
+	local key="$2"
+
+	if ! validate_id "$name"; then
+		fmt err "Invalid ID."
+		return 1
+	fi
+
+	if ! is_ski_urn "$key" "pubk"; then
+		fmt err "Can't store $key in database as id $name: not a SKI public key"
+		return 1
+	fi
+
+	db_ensure_pub
+	if [ -z "$overwrite" ]; then
+		local lu
+		if lu="$(db_lookup "$pubdb" "$name")"; then
+			if [ "$lu" = "$key" ]; then
+				fmt warn "Already stored $name in Public DB; nothing to do."
+				return 0
+			fi
+			fmt err "Refusing to store $name in Public DB (already exists as $lu)"
+			return 1
+		fi
+	fi
+	"$gdbmtool" "$pubdb" store "$name" "$key"
+}
+
+db_store_priv() {
+	local args="$("$getopt" -o '' --long "nopub,overwrite" -- "$@")"
+	if [ "$?" -ne 0 ]; then
+		fmt err "db_store_priv arg parse of $@ failed"
+		return 1
+	fi
+	eval set -- "$args"
+
+	local nopub=""
+	local overwrite=""
+	while true; do
+		case "$1" in
+			'--nopub')
+				nopub="1"
+				shift
+				continue
+				;;
+
+			'--overwrite')
+				overwrite="1"
+				shift
+				continue
+				;;
+
+			'--')
+				shift
+				break
+				;;
+		esac
+	done
+
+	local name="$1"
+	local key="$2"
+
+	if ! validate_id "$name"; then
+		fmt err "Invalid ID."
+		return 1
+	fi
+
+	if ! is_ski_urn "$key" "prvk" && ! is_ski_urn "$key" "syed"; then
+		fmt err "Can't store $key as $name: not a private key or encrypted data"
+		return 1
+	fi
+
+	db_ensure_priv
+	if [ -z "$overwrite" ]; then
+		local lu
+		if lu="$(db_lookup "$privdb" "$name")" ; then
+			if [ "$lu" = "$key" ]; then
+				fmt warn "Already stored $name in Private DB; nothing to do."
+				return 0
+			fi
+			fmt err "Refusing to store $name in Private DB (already exists as $lu)"
+			return 1
+		fi
+	fi
+	"$gdbmtool" "$privdb" store "$name" "$key"
+	if [ -z "$nopub" ]; then
+		local redkey="$(ski_decrypt_prvk "$key" "to derive public key for storage in Public DB")"
+		db_store_pub "$name" "$("$ski" key pub "$redkey")"
+	fi
+}
+
+db_lookup() {
+	local path="$1"
+	local name="$2"
+
+	local result="$("$gdbmtool" "$path" fetch "$name" 2>/dev/null)"
+	if ! is_ski_urn "$result" "$3"; then
+		echo ""
+		false
+	else
+		echo "$result"
+		true
+	fi
+}
+
+db_remove() {
+	local path="$1"
+	local name="$2"
+
+	"$gdbmtool" "$path" delete "$name"
+}
+
+db_resolve() {
+	local key_or_name="$1"
+	local scheme="$2"
+
+	local db
+	case "$scheme" in
+		pubk) db="$pubdb"; db_ensure_pub ;;
+		prvk) db="$privdb"; db_ensure_priv ;;
+		*) fatal "Internal error: bad scheme $scheme." ;;
+	esac
+	[ -z "$db" ] && fatal "Internal error: no database for $scheme lookup."
+
+	while true; do
+		if is_ski_urn "$key_or_name" "$scheme"; then
+			echo "$key_or_name"
+			return 0
+		fi
+
+		if [ "$scheme" = "prvk" ] && is_ski_urn "$key_or_name" "syed"; then
+			ski_decrypt_prvk "$key_or_name" "$3"
+			return 0
+		fi
+
+		if is_ski_urn "$key_or_name"; then
+			fmt err "Unexpected scheme $(ski_urn_scheme "$key_or_name") for datum while resolving key ($3)."
+			fatal "Key ($3) unresolved."
+		fi
+
+		key_or_name="$("$gdbmtool" "$db" fetch "$key_or_name" 2>/dev/null)"
+		if [ -z "$key_or_name" ]; then
+			fmt err "Key for $1 not found."
+			return 1;
+		fi
+
+		if ! is_ski_urn "$key_or_name"; then
+			fmt err "Key for $1 not valid (result $key_or_name)."
+			return 1
+		fi
+	done
+}
+
+_db_list() {
+	local path="$1"
+
+	local line
+	"$gdbmtool" "$path" list | while read line; do
+		line="${line%%urn:ski:*}"
+		echo "$line"
+	done
+
+	true
+}
+
+db_list_pub() {
+	db_ensure_pub
+	_db_list "$pubdb"
+}
+
+db_list_priv() {
+	db_ensure_priv
+	_db_list "$privdb"
+}
+
+db_export() {
+	local path="$1"
+	shift 1
+
+	while [ "$#" -gt 0 ]; do
+		local res="$(db_lookup "$path" "$1")"
+		if [ -n "$res" ]; then
+			printf "urn:ki:ex:%q,%q\n" "$1" "$res"
+		fi
+		shift
+	done
+}
+
+db_import() {
+	local scheme="$1"
+	local line
+	while read line; do
+		case "$line" in
+			'') continue ;;
+			urn:ki:ex:*)
+				local parts="${line#urn:ki:ex:}"
+				local k v rest
+				IFS=',' read k v rest <<< "$parts"
+				if [ -n "$rest" ]; then
+					fmt warn "Import line $line: extraneous bits $rest"
+					continue
+				fi
+				if [ "$scheme" = "priv" ]; then
+					db_store_priv --nopub "$k" "$v"
+				else
+					db_store_pub "$k" "$v"
+				fi
+				if [ "$?" -ne 0 ]; then
+					fmt warn "Import line $line: failed to store"
+				fi
+				;;
+			*)
+				fmt warn "Import line $line: unknown scheme"
+				;;
+		esac
+	done
+}
+
+cmd_resolve_usage() {
+	cat >&2 <<EOF
+usage: $0 resolve [options] KEY
+
+options:
+ -h / --help: show this usage
+ -p / --priv: resolve private keys (default is public)
+EOF
+}
+
+cmd_resolve() {
+	local args="$("$getopt" -o "hp" --long "help,priv" -- "$@")"
+
+	if [ "$?" -ne 0 ]; then
+		fmt err "cmd_resolve arg parse failed"
+		cmd_resolve_usage
+		return 1
+	fi
+	eval set -- "$args"
+
+	local scheme="pubk"
+	while true; do
+		case "$1" in
+			'-h'|'--help')
+				cmd_resolve_usage
+				return 0
+				;;
+
+			'-p'|'--priv')
+				scheme="prvk"
+				shift
+				continue
+				;;
+
+			'--')
+				shift
+				break
+				;;
+		esac
+	done
+
+	if [ "$#" -lt 1 ]; then
+		fmt err "cmd_resolve needs at least one argument"
+		cmd_resolve_usage
+		return 1
+	fi
+
+	while [ "$#" -gt 0 ]; do
+		local key_or_name="$1"
+		db_resolve "$key_or_name" "$scheme" "for $key_or_name, to resolve as requested"
+		shift
+	done
+	
+	true
+}
+
+cmd_store_usage() {
+	cat >&2 <<EOF
+usage: $0 store [options] ID KEY
+
+options:
+ -h / --help: show this usage
+ -p / --priv: expect a private key, or...
+ -P / --pub: ...expect a public key (default is guess based on URN scheme)
+ --nopub: don't also store a private key's public key in the Pub DB
+ --noenc: don't ask to encrypt private keys being stored
+ --read: treat KEY as a filename from which to read a key
+EOF
+}
+
+cmd_store() {
+	local args="$("$getopt" -o "hpP" --long "help,priv,pub,nopub,noenc,read" -- "$@")"
+	if [ "$?" -ne 0 ]; then
+		fmt err "cmd_store arg parse failed"
+		cmd_store_usage
+		return 1
+	fi
+	eval set -- "$args"
+
+	local scheme="guess"
+	local nopub=""
+	local noenc=""
+	local keyread=""
+	while true; do
+		case "$1" in
+			'-h'|'--help')
+				cmd_store_usage
+				return 0
+				;;
+
+			'-p'|'--priv')
+				if [ "$scheme" = "pub" ]; then
+					fmt err "-p/--priv and -P/--pub are incompatible."
+					cmd_store_usage
+					return 1
+				fi
+				scheme="priv"
+				shift
+				continue
+				;;
+
+			'-P'|'--pub')
+				if [ "$scheme" = "priv" ]; then
+					fmt err "-p/--priv and -P/--pub are incompatible."
+					cmd_store_usage
+					return 1
+				fi
+				scheme="pub"
+				shift
+				continue
+				;;
+
+			'--nopub')
+				nopub="1"
+				shift
+				continue
+				;;
+
+			'--noenc')
+				noenc="1"
+				shift
+				continue
+				;;
+
+			'--read')
+				keyread="1"
+				shift
+				continue
+				;;
+
+			'--')
+				shift
+				break
+				;;
+		esac
+	done
+
+	if [ "$#" -ne 2 ]; then
+		fmt err "cmd_store needs two argument (ID and KEY)."
+		cmd_store_usage
+		return 1
+	fi
+
+	local key="$2"
+	if [ -n "$keyread" ]; then
+		key="$(cat "$key")"
+	fi
+
+	if [ "$scheme" = "guess" ]; then
+		if is_ski_urn "$key" "pubk"; then
+			scheme="pub"
+		elif is_ski_urn "$key" "prvk"; then
+			scheme="priv"
+		elif is_ski_urn "$key" "syed"; then
+			scheme="priv"
+		else
+			fmt err "Could not guess the storage scheme of $key (it is a key, right?)."
+			return 1
+		fi
+	fi
+
+	case "$scheme" in
+		pub)
+			if ! db_store_pub "$1" "$key"; then
+				fmt err "Error while storing public key."
+				return 1
+			fi
+			;;
+
+		priv)
+			local store_args=""
+			if [ -n "$nopub" ]; then
+				store_args="$store_args --nopub"
+			fi
+
+			if [ -z "$noenc" ] && is_ski_urn "$key" "prvk"; then
+				key="$(ski_encrypt_prvk "$key")"
+			fi
+
+			if ! db_store_priv $store_args "$1" "$key"; then
+				fmt err "Error while storing private key."
+				return 1
+			fi
+			;;
+
+		*) fatal "Logic error: unknown scheme $scheme." ;;
+	esac
+	
+	true
+}
+
+cmd_gen_usage() {
+	cat >&2 <<EOF
+usage: $0 gen [options] ID
+
+make a new keypair
+
+options:
+ -h / --help: show this usage
+ --nopub: don't also store the public key
+ --noenc: don't encrypt the private key
+EOF
+}
+
+cmd_gen() {
+	local args="$("$getopt" -o 'h' --long "help,nopub,noenc" -- "$@")"
+	if [ "$?" -ne 0 ]; then
+		fmt err "cmd_gen arg parse failed"
+		cmd_gen_usage
+		return 1
+	fi
+	eval set -- "$args"
+
+	local nopub=""
+	local noenc=""
+	while true; do
+		case "$1" in
+			'-h'|'--help')
+				cmd_gen_usage
+				return 0
+				;;
+
+			'--nopub')
+				nopub="1"
+				shift
+				continue
+				;;
+
+			'--noenc')
+				noenc="1"
+				shift
+				continue
+				;;
+
+			'--')
+				shift
+				break
+				;;
+		esac
+	done
+
+	if [ "$#" -lt 1 ]; then
+		fmt err "gen also needs an ID"
+		return 1
+	fi
+
+	local id="$1"
+	if ! validate_id "$id"; then
+		fmt err "Invalid ID (but see above for how to override)"
+		return 1
+	fi
+
+	local store_args=""
+	[ -n "$nopub" ] && store_args="$store_args --nopub"
+	[ -n "$noenc" ] && store_args="$store_args --noenc"
+	if cmd_store -p $store_args "$id" "$("$ski" key gen)"; then
+		fmt note "Your new key is ready; use $0 resolve [-p] $(printf "%q" "$id") to view the parts, or go ahead and box things with it."
+		true
+	else
+		false
+	fi
+}
+
+cmd_edit_usage() {
+	cat >&2 <<EOF
+usage: $0 edit ID COMMAND
+
+commands include:
+ encrypt-key: encrypt an unencrypted private key (and store it)
+ decrypt-key: decrypt an encrypted private key (and store it)
+ passwd: change a private key's password
+ rename NEW: move all keys under ID to NEW
+ delete [options]: delete keys under ID:
+  -p / --priv: only private keys (default all)
+  -P / --pub: only public keys (default all)
+EOF
+}
+
+cmd_edit() {
+	if [ "$#" -lt 2 ]; then
+		fmt err "Need at least an ID and COMMAND for edit."
+		cmd_edit_usage
+		return 1
+	fi
+
+	local id="$1"
+	local cmd="$2"
+	shift 2
+
+	case "$cmd" in
+		'encrypt-key')
+			local key="$(db_lookup "$privdb" "$id")"
+			if [ -z "$key" ]; then
+				fmt err "Key for $id not found."
+				return 1
+			fi
+			if ! is_ski_urn "$key" "prvk"; then
+				fmt err "Bad key scheme $(ski_urn_scheme "$key") (already encrypted?)."
+				return 1
+			fi
+			key="$(ski_encrypt_prvk "$key")"
+			db_store_priv --overwrite --nopub "$id" "$key"
+			return 0
+			;;
+
+		'decrypt-key')
+			local key="$(db_lookup "$privdb" "$id")"
+			if [ -z "$key" ]; then
+				fmt err "Key for $id not found."
+				return 1
+			fi
+			if ! is_ski_urn "$key" "syed"; then
+				fmt err "Bad key scheme $(ski_urn_scheme "$key") (already decrypted?)."
+				return 1
+			fi
+			key="$(ski_decrypt_prvk "$key" "for $id, to store as decrypted key")"
+			db_store_priv --overwrite --nopub "$id" "$key"
+			return 0
+			;;
+
+		'passwd')
+			local key="$(db_lookup "$privdb" "$id")"
+			if [ -z "$key" ]; then
+				fmt err "Key for $id not found."
+				return 1
+			fi
+			if ! is_ski_urn "$key" "syed"; then
+				fmt err "Bad key scheme $(ski_urn_scheme "$key") (you might just want encrypt-key)."
+				return 1
+			fi
+			local redkey="$(ski_decrypt_prvk "$key" "for $id, to change password")"
+			redkey="$(ski_encrypt_prvk "$redkey")"
+			db_store_priv --overwrite --nopub "$id" "$redkey"
+			return 0
+			;;
+
+		'rename')
+			if [ "$#" -lt 1 ]; then
+				fmt err "Need at least one argument to rename (NEWID)."
+				return 1
+			fi
+			local pubent="$(db_lookup "$pubdb" "$id")"
+			local privent="$(db_lookup "$privdb" "$id")"
+			if [ -z "$pubent" -a -z "$privent" ]; then
+				fmt err "Neither database contains an entry for $id."
+				return 1
+			fi
+
+			local newid="$1"
+			if [ -n "$(db_lookup "$pubdb" "$newid")" -o -n "$(db_lookup "$privdb" "$newid")" ]; then
+				fmt err "ID $newid is already in use in one of the databases; if you intend to overwrite it, please delete these entries first."
+				return 1
+			fi
+			if [ -n "$pubent" ]; then
+				db_store_pub "$newid" "$pubent"
+				db_remove "$pubdb" "$id"
+			fi
+			if [ -n "$privent" ]; then
+				db_store_priv --nopub "$newid" "$privent"
+				db_remove "$privdb" "$id"
+			fi
+			return 0
+			;;
+
+		'delete')
+			local args="$("$getopt" -o 'pP' --long "priv,pub" -- "$@")"
+			if [ "$?" -ne 0 ]; then
+				fmt err "Error parsing delete args."
+				return 1
+			fi
+			eval set -- "$args"
+
+			local keys="all"
+			while true; do
+				case "$1" in
+					'-p'|'--priv')
+						if [ "$keys" = "pub" ]; then
+							fmt err "-p/--priv and -P/--pub are mutually exclusive."
+							return 1
+						fi
+						keys="priv"
+						shift
+						continue
+						;;
+
+					'-P'|'--pub')
+						if [ "$keys" = "priv" ]; then
+							fmt err "-p/--priv and -P/--pub are mutually exclusive."
+							return 1
+						fi
+						keys="pub"
+						shift
+						continue
+						;;
+
+					'--')
+						shift
+						break
+						;;
+				esac
+			done
+
+			if [ "$keys" = "priv" -o "$keys" = "all" ]; then
+				db_remove "$privdb" "$id"
+			fi
+			if [ "$keys" = "pub" -o "$keys" = "all" ]; then
+				db_remove "$pubdb" "$id"
+			fi
+			return 0
+			;;
+
+		*)
+			fmt err "Unknown command $cmd."
+			cmd_edit_usage
+			return 1
+			;;
+	esac
+}
+
+cmd_cert_usage() {
+	cat >&2 <<EOF
+usage: $0 cert [options] [ID_OR_CERT [ID_OR_CERT ...]]
+
+for each ID in the Private DB, writes out a CERT
+for each CERT, imports it after verification
+if given no arguments, writes every ID in the Private DB's CERT
+
+options:
+ -h / --help: show this usage
+ -d / --dry: don't actually import, just verify
+EOF
+}
+
+cmd_cert() {
+	local args="$("$getopt" -o 'hd' --long "help,dry" -- "$@")"
+	if [ "$?" -ne 0 ]; then
+		fmt err "cmd_cert args parse failed"
+		cmd_cert_usage
+		return 1
+	fi
+	eval set -- "$args"
+
+	local dry=""
+	while true; do
+		case "$1" in
+			'-h'|'--help')
+				cmd_cert_usage
+				return 0
+				;;
+
+			'-d'|'--dry')
+				dry="1"
+				shift
+				continue
+				;;
+
+			'--')
+				shift
+				break
+				;;
+		esac
+	done
+
+	if [ "$#" -eq 0 ]; then
+		local id
+		for id in $(db_list_priv); do
+			echo "$(cert_make "$id" "$(db_resolve "$id" "prvk" "for $id, to sign certificate")")"
+		done
+		return 0
+	fi
+
+	while [ "$#" -gt 0 ]; do
+		if is_cert "$1"; then
+			if cert_verify "$1"; then
+				local parts=( $(cert_get_parts "$1") )
+				if [ "$?" -ne 0 ]; then
+					fmt err "Failed to get parts of validated cert $1?"
+					shift
+					continue
+				fi
+				local id="${parts[0]}" key="${parts[1]}"
+				if [ -z "$dry" ]; then
+					db_store_pub "$id" "$key"
+					fmt note "Stored $key as $id."
+				else
+					fmt note "Cert for $key as $id validated, but not stored as you requested."
+				fi
+			else
+				fmt warn "Cert $1 could not be verified."
+			fi
+		else
+			local key="$(db_resolve "$1" "prvk" "for $1, to sign certificate")"
+			if [ "$?" -ne 0 ]; then
+				fmt err "Could not find $1 in Private DB."
+				shift
+				continue
+			fi
+			echo "$(cert_make "$1" "$key")"
+		fi
+		shift
+	done
+}
+
+cmd_encrypt_usage() {
+	asdf
+}
+
+cmd_list_usage() {
+	cat >&2 <<EOF
+usage: $0 list [options]
+
+options:
+ -h / --help: show this usage
+ -p / --priv: list private IDs (default is public IDs)
+EOF
+}
+
+cmd_list() {
+	local args="$("$getopt" -o 'hp' --long "help,priv" -- "$@")"
+	if [ "$?" -ne 0 ]; then
+		fmt err "cmd_list arg parse failed"
+		return 1
+	fi
+	eval set -- "$args"
+
+	local scheme="pub"
+	while true; do
+		case "$1" in
+			'-h'|'--help')
+				cmd_list_usage
+				return 0
+				;;
+
+			'-p'|'--priv')
+				scheme="priv"
+				shift
+				continue
+				;;
+
+			'--')
+				shift
+				break
+				;;
+		esac
+	done
+
+	case "$scheme" in
+		pub) db_list_pub ;;
+		priv) db_list_priv ;;
+		*) fatal "Logic error: unknown scheme $scheme." ;;
+	esac
+
+	true
+}
+
+cmd_export_usage() {
+	cat >&2 <<EOF
+usage: $0 export [options] [ID [ID [...]]]
+
+if no IDs are given, all are assumed.
+
+options:
+ -h / --help: display this usage.
+ -o file: write to file instead of - (stdout) (fails if this file exists)
+ -p / --priv: export the private database (default public)
+EOF
+}
+
+cmd_export() {
+	local args="$("$getopt" -o "ho:p" --long "help,priv" -- "$@")"
+	if [ "$?" -ne 0 ]; then
+		fmt err "cmd_export args parse failure"
+		cmd_export_usage
+		return 1
+	fi
+	eval set -- "$args"
+
+	local out="-"
+	local scheme="pub"
+	while true; do
+		case "$1" in
+			'-h'|'--help')
+				cmd_export_usage
+				return 0
+				;;
+
+			'-o')
+				out="$2"
+				shift 2
+				continue
+				;;
+
+			'-p'|'--priv')
+				scheme="priv"
+				shift
+				continue
+				;;
+
+			'--')
+				shift
+				break
+				;;
+		esac
+	done
+	[ -z "$out" ] && out="-"
+	local trunc=""
+	if [ "$out" = "-" ]; then
+		out="/dev/stdout"
+		trunc="1"
+	fi
+	if [ -f "$out" -a -z "$trunc" ]; then
+		fmt err "Refusing to overwrite extant file $out."
+		return 1
+	fi
+	local path="$pubdb"
+	if [ "$scheme" = "priv" ]; then
+		path="$privdb"
+	fi
+	local ids=( "$@" )
+	if [ "$#" -eq 0 ]; then
+		if [ "$scheme" = "priv" ]; then
+			ids=( $(db_list_priv) )
+		else
+			ids=( $(db_list_pub) )
+		fi
+	fi
+	db_export "$path" "${ids[@]}"
+	true
+}
+
+cmd_import_usage() {
+	cat >&2 <<EOF
+usage: $0 import [options] [FILE]
+
+options:
+ -h / --help: show this usage
+ -p / --priv: import into the Private DB
+EOF
+}
+
+cmd_import() {
+	local args="$("$getopt" -o 'hp' --long "help,priv" -- "$@")"
+	if [ "$?" -ne 0 ]; then
+		fmt err "cmd_import args parse failed"
+		cmd_import_usage
+		return 1
+	fi
+	eval set -- "$args"
+
+	local scheme="pub"
+	while true; do
+		case "$1" in
+			'-h'|'--help')
+				cmd_import_usage
+				return 0
+				;;
+
+			'-p'|'--priv')
+				scheme="priv"
+				shift
+				continue
+				;;
+
+			'--')
+				shift
+				break
+				;;
+		esac
+	done
+
+	local in="/dev/stdin"
+	if [ -n "$1" ]; then
+		in="$1"
+	fi
+
+	db_import "$scheme" < "$in"
+	true
+}
+
+cmd_box_usage() {
+	cat >&2 <<EOF
+usage: $0 box [options] [FROM] [TO] FILE
+
+FROM need only be specified if no -f option is specified.
+TO need only be specified if no -t option is specified.
+FROM and TO may be set from the environment vars KI_FROM and KI_TO respectively.
+If only two non-option arguments are given, TO FILE is assumed.
+IF only one non-option argument is given, FILE is assumed.
+FILE must be a real, seekable file, because it may be read twice. Use mktemp if needed for scripting.
+
+options:
+ -h / --help: show this usage.
+ -f FROM / --from FROM: set sender (private key) ID.
+ -t TO / --to TO: set recipient (public key) ID.
+ --noenc: Don't encrypt the box.
+ --nosign: Don't sign the box.
+EOF
+}
+
+cmd_box() {
+	local args="$("$getopt" -o 'hf:t:' --long "help,from:,to:,noenc,nosign" -- "$@")"
+	if [ "$?" -ne 0 ]; then
+		fmt err "cmd_box args parse failed"
+		cmd_box_usage
+		return 1
+	fi
+	eval set -- "$args"
+	
+	local from="" to="" noenc="" nosign=""
+	while true; do
+		case "$1" in
+			'-h'|'--help')
+				cmd_box_usage
+				return 0
+				;;
+
+			'-f'|'--from')
+				from="$2"
+				shift 2
+				continue
+				;;
+
+			'-t'|'--to')
+				to="$2"
+				shift 2
+				continue
+				;;
+
+			'--noenc')
+				noenc="1"
+				shift
+				continue
+				;;
+
+			'--nosign')
+				nosign="1"
+				shift
+				continue
+				;;
+
+			'--')
+				shift
+				break
+				;;
+		esac
+	done
+
+	if [ "$#" -ge 3 ]; then
+		if [ -n "$from" ]; then
+			fmt warn "From $1 overrides the option-specified $from."
+		fi
+		from="$1"
+		shift
+	fi
+
+	if [ "$#" -ge 2 ]; then
+		if [ -n "$to" ]; then
+			fmt warn "To $1 overrides the option-specified $to."
+		fi
+		to="$1"
+		shift
+	fi
+
+	[ -z "$from" ] && from="$KI_FROM"
+	[ -z "$to" ] && to="$KI_TO"
+
+	if [ -z "$from" ]; then
+		fmt err "No FROM specified."
+		cmd_box_usage
+		return 1
+	fi
+
+	if [ -z "$to" ]; then
+		fmt err "No TO specified."
+		cmd_box_usage
+		return 1
+	fi
+
+	if [ "$#" -lt 1 ]; then
+		fmt err "A seekable filename FILE is needed for boxing."
+		cmd_box_usage
+		return 1
+	fi
+
+	local file="$1"
+	local box_args=""
+	[ -n "$noenc" ] && box_args="$box_args --noenc"
+	[ -n "$nosign" ] && box_args="$box_args --nosign"
+
+	box_make $box_args "$from" "$to" "$file"
+}
+
+cmd_unbox_usage() {
+	cat >&2 <<EOF
+usage: $0 unbox [options] FILE OUT
+
+Unbox FILE to OUT.
+FILE must be a regular, seekable file.
+OUT must refer to a path that can be a regular, seekable file.
+Use mktemp if needed for scripting.
+
+options:
+ -h / --help: show this usage.
+ -l / --list: don't unbox, only print info...
+ --machine: ...in a machine-parseable form (default human-readable).
+EOF
+}
+
+cmd_unbox() {
+	local args="$("$getopt" -o 'hl' --long "help,list,machine" -- "$@")"
+	if [ "$?" -ne 0 ]; then
+		fmt err "cmd_unbox arg parsing error"
+		cmd_unbox_usage
+		return 1
+	fi
+	eval set -- "$args"
+
+	local list="" machine=""
+	while true; do
+		case "$1" in
+			'-h'|'--help')
+				cmd_unbox_usage
+				return 0
+				;;
+
+			'-l'|'--list')
+				list="1"
+				shift
+				continue
+				;;
+
+			'--machine')
+				machine="1"
+				shift
+				continue
+				;;
+
+			'--')
+				shift
+				break
+				;;
+		esac
+	done
+
+	if [ -n "$list" ]; then
+		if [ "$#" -lt 1 ]; then
+			fmt err "Need at least BOXFILE when listing."
+			cmd_unbox_usage
+			return 1
+		fi
+	else
+		if [ "$#" -lt 2 ]; then
+			fmt err "Need at least a BOXFILE and an OUTFILE path."
+			cmd_unbox_usage
+			return 1
+		fi
+	fi
+
+	local boxfile="$1"
+	local outfile="$2"
+
+	if [ -z "$boxfile" -o ! -f "$boxfile" ]; then
+		fmt err "Must specify a real file for BOXFILE."
+		cmd_unbox_usage
+		return 1
+	fi
+
+	if [ -z "$list" -a -z "$outfile" ]; then
+		fmt err "Must specify a real path for OUTFILE."
+		cmd_unbox_usage
+		return 1
+	fi
+
+	if [ -n "$list" ]; then
+		local parts
+		if ! parts=( $(box_get_header "$boxfile") ); then
+			fmt err "$boxfile doesn't appear to be a box."
+			return 1
+		fi
+		local from="${parts[0]}" to="${parts[1]}" sig="${parts[2]}" enc="${parts[3]}"
+		if [ -n "$machine" ]; then
+			printf "FROM=%q\nTO=%q\nSIG=%q\nENC=%q\n" "$from" "$to" "$sig" "$enc"
+		else
+			local sigstat="signed"
+			[ -z "$sig" ] && sigstat="not signed"
+			local encstat="encrypted"
+			[ "$enc" = "0" ] && encstat="not encrypted"
+			fmt note "$(printf "Box from %q to %q, %s, %s" "$from" "$to" "$sigstat" "$encstat")"
+		fi
+		return 0
+	fi
+
+	box_unpack "$boxfile" "$outfile"
+}
+
+usage() {
+	cat >&2 <<EOF
+usage: $0 SUBCOMMAND [...]
+
+arguments to subcommands are documented individually.
+
+subcommands:
+- resolve
+- store
+- gen
+- edit
+- cert
+- list
+- export
+- import
+- box
+- unbox
+EOF
+}
+
+main() {
+	local cmd="$1"
+	shift
+	case "$cmd" in
+		'resolve') cmd_resolve "$@" ;;
+		'store') cmd_store "$@" ;;
+		'gen') cmd_gen "$@" ;;
+		'edit') cmd_edit "$@" ;;
+		'cert') cmd_cert "$@" ;;
+		'list') cmd_list "$@" ;;
+		'export') cmd_export "$@" ;;
+		'import') cmd_import "$@" ;;
+		'box') cmd_box "$@" ;;
+		'unbox') cmd_unbox "$@" ;;
+		*) fmt err "Unknown command $cmd."; usage; return 1 ;;
+	esac
+}
+
+sanity_checks
+main "$@"
