@@ -291,20 +291,24 @@ box_unpack() {
 		sigk="$pubk"
 	fi
 
-	if ! prvk="$(db_resolve "${!prvkfrom}" "prvk" "for ${!prvkfrom}, to unbox")"; then
-		if prvk="$(db_resolve "${!prvkother}" "prvk" "for ${!prvkother}, to unbox")"; then
-			if pubk="$(db_resolve "${!prvkfrom}" "pubk")"; then
-				fmt warn "Address swap; couldn't resolve ${!prvkfrom} as private key, got it from ${!prvkother} instead."
+	if ! [ "$encstat" = "0" ]; then
+		if ! prvk="$(db_resolve "${!prvkfrom}" "prvk" "for ${!prvkfrom}, to unbox")"; then
+			if prvk="$(db_resolve "${!prvkother}" "prvk" "for ${!prvkother}, to unbox")"; then
+				if pubk="$(db_resolve "${!prvkfrom}" "pubk")"; then
+					fmt warn "Address swap; couldn't resolve ${!prvkfrom} as private key, got it from ${!prvkother} instead."
+				else
+					fmt err "Only resolved the private key of ${!prvkother}, but the public key of ${!prvkfrom} is missing--can't unbox without it."
+					return 1
+				fi
 			else
-				fmt err "Only resolved the private key of ${!prvkother}, but the public key of ${!prvkfrom} is missing--can't unbox without it."
+				fmt err "Couldn't resolve any private key (is this box addressed to you?):"
+				fmt note "$from"
+				fmt note "$to"
 				return 1
 			fi
-		else
-			fmt err "Couldn't resolve any private key (is this box addressed to you?):"
-			fmt note "$from"
-			fmt note "$to"
-			return 1
 		fi
+	else
+		fmt note "This box is unencrypted."
 	fi
 
 	if [ "$encstat" = "0" ]; then
