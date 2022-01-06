@@ -172,6 +172,12 @@ def db_ensure(private = False):
     kind = 'Private' if private else 'Public'
     var = 'PRIVDB' if private else 'PUBDB'
     admon = f'(If this is in error, set the environment variable {var} to the correct path.)'
+    dn = os.path.dirname(db)
+    if not os.path.exists(dn):
+        log.info(f'{kind} DB directory {dn!r} does not exist. {admon}')
+        if not prompt_yn('Do you want to create it?'):
+            fatal(f'Refused to create {kind} DB directory.')
+        os.makedirs(dn)
     if not os.path.isfile(db):
         log.info(f'{kind} DB {db!r} does not exist. {admon}')
         if not prompt_yn('Do you want to create it?'):
