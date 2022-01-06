@@ -182,9 +182,8 @@ def db_ensure(private = False):
         log.info(f'{kind} DB {db!r} does not exist. {admon}')
         if not prompt_yn('Do you want to create it?'):
             fatal(f'Refused to create {kind} DB.')
-        with dbm.gnu.open(db, 'c') as d:
+        with dbm.gnu.open(db, 'c', 0o600) as d:
             pass
-        os.chmod(db, 0o600)
     s = os.stat(db)
     if s.st_uid != os.geteuid():
         log.critical(f"{kind} DB {db!r} isn't owned by you. This is unsafe. {admon}")
@@ -243,7 +242,7 @@ def db_store(ident, key, with_pub = True, encrypt = True, overwrite = False):
             if with_pub:
                 log.info("You'll need to provide this password again to store the public key.")
             key = encrypt_key(key)
-        with dbm.gnu.open(db_ensure(True)) as db:
+        with dbm.gnu.open(db_ensure(True), 'w') as db:
             ek = db.get(ident)
             if ek == key:
                 log.warning(f'Ident {ident!r} already stored; nothing to do.')
@@ -257,7 +256,7 @@ def db_store(ident, key, with_pub = True, encrypt = True, overwrite = False):
         if with_pub:
             db_store(ident, ski_derive(decrypt_key(key, f"To store the public key of {ident!r}")))
     elif scm == 'pubk':
-        with dbm.gnu.open(db_ensure(False)) as db:
+        with dbm.gnu.open(db_ensure(False), 'w') as db:
             ek = db.get(ident)
             if ek == key:
                 log.warning(f'Ident {ident!r} already stored; nothing to do.')
@@ -274,7 +273,7 @@ def db_store(ident, key, with_pub = True, encrypt = True, overwrite = False):
 
 def db_remove(ident, private = False, ignore_nonexistent = False):
     kind = 'private' if private else 'public'
-    with dbm.gnu.open(db_ensure(private)) as db:
+    with dbm.gnu.open(db_ensure(private), 'w') as db:
         try:
             del db[ident]
         except dbm.gnu.error:
