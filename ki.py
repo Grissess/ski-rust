@@ -123,7 +123,7 @@ def ski_get_pdk():
         return run_ski(['sym', 'derive'], None).decode().rstrip()
     finally:
         if termattr is not None:
-            termios.tcsetattr(sys.sydin, termios.TCSANOW, termattr)
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, termattr)
 
 def ski_decrypt(key, data):
     return run_ski(['sym', 'decrypt', '-a', key], data)
