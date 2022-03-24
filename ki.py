@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 import os
+import termios
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
@@ -114,7 +115,15 @@ def ski_urn_scheme(urn):
     return mo.group(1)
 
 def ski_get_pdk():
-    return run_ski(['sym', 'derive'], None).decode().rstrip()
+    try:
+        termattr = termios.tcgetattr(sys.stdin)
+    except Exception:
+        termattr = None
+    try:
+        return run_ski(['sym', 'derive'], None).decode().rstrip()
+    finally:
+        if termattr is not None:
+            termios.tcsetattr(sys.sydin, termios.TCSANOW, termattr)
 
 def ski_decrypt(key, data):
     return run_ski(['sym', 'decrypt', '-a', key], data)
