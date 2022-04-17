@@ -118,7 +118,8 @@ usable lifetime.
 
 Our reference implementation provides the "ski:symk" scheme for the 256-bit
 key, and the "ski:syed" scheme for symmetrically-encrypted data, which is the
-simple concatenation of the 192-bit nonce and the ciphertext. Under the "sym" command:
+simple concatenation of the 192-bit nonce and the ciphertext. Under the "sym"
+command:
 
 - A new, random key on a host with sufficient entropy can be generated with
   "gen".

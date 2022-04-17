@@ -40,6 +40,12 @@ in your $PATH if you would like. Common choices are a personal `bin` dir or
 export formats--for example, it lacks revocation certificates or expiration.
 Nonetheless, it is provided for responsible use and testing.
 
+Also included is `ki.py`, a nearly-identical reference implementation for
+Python--which uses interoperable database and interchange formats. This script
+is appropriate for, e.g., our friends on macOS, whose shipped `bash` and
+`getopt` are too old to support `ki` properly. It requires at least Python 3.6
+due to f-strings, but it wouldn't be hard to port to older Python.
+
 
 
 Cryptography
