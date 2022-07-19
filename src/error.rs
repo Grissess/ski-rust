@@ -2,6 +2,7 @@
 pub enum Error {
     CodingError(base64::DecodeError),
     InvalidLength(usize),
+    InvalidSchemeLength(u8),
     BadScheme(String),
     BadEncoding(std::str::Utf8Error),
     SchemeTooLong(std::num::TryFromIntError),
