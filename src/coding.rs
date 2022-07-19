@@ -46,7 +46,7 @@ impl CodedObject {
 
     pub fn from_binary(bytes: &[u8]) -> error::Result<CodedObject> {
         let scheme_len = bytes[0];
-        if scheme_len >= bytes.len() {
+        if scheme_len as usize >= bytes.len() {
             return Err(Error::InvalidSchemeLength(scheme_len));
         }
         let scheme = std::str::from_utf8(&bytes[1 .. scheme_len as usize + 1])?;
