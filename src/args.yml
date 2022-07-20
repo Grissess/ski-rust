@@ -1,7 +1,7 @@
 name: ski
 about: Ski Rust Reference Client
 author: Graham Northup <grissess@nexusg.org>
-version: "0.1-20200629"
+version: "0.1-20220719"
 before_help: This software HAS NOT BEEN VERIFIED by any third party. Use at your own risk.
 subcommands:
     - encode:
