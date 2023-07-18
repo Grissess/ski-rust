@@ -51,12 +51,18 @@ subcommands:
                         required: true
                         index: 1
                     - PUBKEY:
-                        help: SKI public key URI
+                        help: SKI public key URIs
                         required: true
-                        index: 2
-                    - FILE:
+                        multiple: true
+                    - file:
+                        short: f
+                        long: file
                         help: Plaintext file to read (default standard in)
-                        index: 3
+                        takes_value: true
+                    - multiway:
+                        short: m
+                        long: multiway
+                        help: Even with only one keypair, encode multiway
             - decrypt:
                 about: Decrypt data with a key, writing the plaintext to stdout
                 args:
@@ -69,12 +75,19 @@ subcommands:
                         required: true
                         index: 1
                     - PUBKEY:
-                        help: SKI public key URI
+                        help: SKI public key URIs
                         required: true
-                        index: 2
-                    - FILE:
+                        multiple: true
+                    - file:
+                        short: f
+                        long: file
                         help: Ciphertext file to read (default standard in)
-                        index: 3
+                        takes_value: true
+                    - index:
+                        short: i
+                        long: index
+                        help: Index of session key in a multiway-encrypted datum
+                        takes_value: true
             - sign:
                 about: Sign data, writing a signature to stdout
                 args:

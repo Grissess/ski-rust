@@ -194,14 +194,46 @@ encrypted with the message key. Under the "key" command:
   it is provided as a diagnostic aid, and for integration with other systems.
 
 - Ciphertext can be produced from plaintext with "encrypt", and the inverse
-  done with "decrypt". Both operations require a public key (usually the
-  "recipient") and a private key (usually the "sender"). "decrypt" can recover
-  using either the original private and public key, or (more typically) the
-  private key of the recipient and the public key of the sender.
+  done with "decrypt". Both operations require some public keys (usually the
+  "recipients") and a private key (usually the "sender"). "decrypt" can recover
+  using either the original private and any public key, or (more typically) the
+  private key of any recipient and the public key of the sender.
 
-Future work includes extending the number of public keys to which a single
-message can be addressed, as it requires only constant size (the size of one
-encrypted message key) to add further recipients by public key.
+For "multiway" encryption, with multiple recipients, the format is extended to
+the "ski:enmw" scheme, which consists of up to 255 "syed" packets, each
+encrypted with a pairwise shared key between a single private key and one of
+the public keys, a "syed" packet containing a message integrity code (MIC),
+which presently consists of an encrypted hash of the same variety used in
+signatures (see below), and a "syed" packet containing the encrypted data. The
+MIC and data are encrypted with the same per-message "session" key; we believe
+that an anomalously successful decryption is no higher a risk than that of a
+hash collision of the underlying algorithm. Unlike the signature tokens
+described below, the full size of the hash function is encrypted.
+
+Because of the MIC, failure to decrypt data is a detectable circumstance. In
+our reference implementation, "decrypt" can fail if no shared key formed from
+the one private key and any given public key suffices to decrypt a message
+matching the MIC. This offers some form of "authenticated" encryption, though
+not as strong an attestation as a signature, because a signature certifies that
+a _certain_ public key was used, whereas our implementation permits _any_
+public key to suffice. Nonetheless, this MIC provides some tamper-resistance,
+in that decryption by any party will fail (up to hash collision) if the MIC or
+data packets are modified. Since the session key packets precede this, an
+active attacker can cause any single party to be unable to decrypt the message
+by tampering with their session key packet; however, because the only way to
+verify which shared key was used for each packet is by trial decryption, the
+attacker cannot determine (up to possessing a target's private key) which
+packet was intended for which recipient _a priori_. Thus, provided the order of
+session keys are randomized uniformly ("scrambled"), a targeted DoS by an
+active attacker can only affect a uniformly-random set of recipients at any
+given time. (An active attacker can easily create a total DoS by preventing
+communication in the first place.) Scrambling recipient keys requires a trusted
+entropy source, however, and is thus outside the scope of our reference
+implementation, but remains a recommendation.
+
+Since the MIC feature of "enmw" packets can be considered useful even with only
+two parties, our "encrypt" command accepts a "-m" or "--multiway" option that
+forces this behavior.
 
 
 

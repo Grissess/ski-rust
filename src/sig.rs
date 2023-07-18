@@ -55,7 +55,7 @@ pub struct Signature {
 pub type SignatureHash = Sha512;
 pub const SIG_HASH_SIZE: usize = 64;
 
-pub struct Hash([u8; SIG_HASH_SIZE]);
+pub struct Hash(pub [u8; SIG_HASH_SIZE]);
 
 impl Clone for Hash {
     fn clone(&self) -> Hash {
