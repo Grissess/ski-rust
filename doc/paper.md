@@ -92,7 +92,7 @@ coding standard is flexible enough to admit a self-describing packet.
 Symmetric Encryption
 ====================
 
-Arguably the easiest form of encryption, symmetric encryption depends on a
+Arguably the simplest form of encryption, symmetric encryption depends on a
 shared secret, referred to as a "symmetric key", or simply a key. A symmetric
 cipher is two operations, encryption and decryption, which take some amount of
 data and such a key, and for which encryption composed with decryption only
@@ -136,6 +136,43 @@ command:
   the inverse done with the "decrypt" command, both of which expect a symmetric
   key. Both use the binary encoding of the "syed" scheme by default, but can be
   given an argument to generate a URN instead.
+
+
+
+As an Entropy Source
+--------------------
+
+A suitable cipher can be used as a CSPRNG, given an initial entropic state.
+This relies on the cipher's resistance to key discovery to prevent an
+observation of current states from entailing previous states. If no further
+entropy is mixed into the state, however, care must be taken to never disclose
+all, or nearly all (up to practical brute force), of the bits of state, as the
+CSPRNG's subsequent states can be easily determined (at least until the next
+entropy mix).
+
+Our reference implementation provides the "sym rand" command, which takes at
+least 56 bytes of state and uses it as the concatenation of a 256-bit key and
+192-bit nonce, as described above. It then encrypts an "initialization vector"
+of the same size as the state with the given key and nonce. The default vector,
+if none is given, consists of repeated 0x5A (01011010) bytes, which give a
+balanced mix of set and clear bits. The resulting ciphertext, with the same
+size as the state, is written out as the new state.
+
+Implementations should mix entropy into the first 56 bytes of the state
+periodically, whenever a suitably "unexpected" event occurs--such as due to
+user input, network jitter, or physically random events such as disk seeks. The
+entire set of entropic sources and their quality is beyond the scope of this
+paper, but any amount of mixing will restore non-determinism if the current
+state is ever disclosed. Implementations should avoid disclosing their state,
+including leaking more than the minimum required number of bits of its value.
+This can be mitigated by regular entropy mixing, although a high-quality,
+high-bandwidth entropy source obviates the need to use a cipher as a CSPRNG in
+the first place.
+
+While not a guarantee of security, we note that the Linux kernel also uses
+Bernstein's ChaCha20 cipher as its CSPRNG (T'so 2016--commit e192be9), and this
+gives us at least some confidence in the cipher's use for this purpose, if not
+the design of this interface.
 
 
 
@@ -228,8 +265,9 @@ session keys are randomized uniformly ("scrambled"), a targeted DoS by an
 active attacker can only affect a uniformly-random set of recipients at any
 given time. (An active attacker can easily create a total DoS by preventing
 communication in the first place.) Scrambling recipient keys requires a trusted
-entropy source, however, and is thus outside the scope of our reference
-implementation, but remains a recommendation.
+entropy source, however; our recommendation is to use a high-quality randomness
+API if one is available on the host, or otherwise to use the symmetric cipher
+as a CSPRNG, as above, with the caveats as mentioned.
 
 Since the MIC feature of "enmw" packets can be considered useful even with only
 two parties, our "encrypt" command accepts a "-m" or "--multiway" option that

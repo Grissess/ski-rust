@@ -64,6 +64,15 @@ fn main() {
             0
         },
 
+        ("rand", Some(args)) => {
+            let bytes: usize = args.value_of("AMOUNT").unwrap().parse().unwrap();
+            let mut result: Vec<u8> = Vec::with_capacity(bytes);
+            result.extend(std::iter::repeat(0u8).take(bytes));
+            csrng::fill_random(&mut result[..]);
+            io::stdout().write_all(&result[..]).unwrap();
+            0
+        }
+
         ("key", Some(args)) => {
             match args.subcommand() {
                 ("gen", Some(_args)) => {
@@ -243,6 +252,28 @@ fn main() {
                     let plain = cipher.decipher(&data);
                     io::stdout().write_all(&plain).unwrap();
                     0
+                },
+
+                ("rand", Some(args)) => {
+                    let input = read_all_input(args.value_of_os("file")).unwrap();
+                    let needed_bytes = sym::Key::SIZE + sym::Key::NONCE;
+                    if input.len() < needed_bytes {
+                        panic!("need at least {} bytes of previous state", needed_bytes);
+                    }
+                    let iv: Vec<u8> = if args.is_present("iv") {
+                        args.value_of("iv").unwrap().as_bytes().into()
+                    } else {
+                        std::iter::repeat(0x5au8).take(input.len()).collect()
+                    };
+                    let mut key = sym::Key { bytes: [0u8; sym::Key::SIZE] };
+                    key.bytes.copy_from_slice(&input[.. sym::Key::SIZE]);
+                    let mut nonce = [0u8; sym::Key::NONCE];
+                    nonce.copy_from_slice(&input[sym::Key::SIZE .. needed_bytes]);
+                    let cipher = key.cipher_with_nonce(nonce);
+                    let state = cipher.encipher(&iv);
+                    io::stdout().write_all(&state.data).unwrap();
+                    0
+
                 },
 
                 _ => {

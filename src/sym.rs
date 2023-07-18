@@ -24,6 +24,7 @@ pub struct EncipheredData {
 
 impl Key {
     pub const SIZE: usize = 32;
+    pub const NONCE: usize = 24;
 
     pub fn new() -> Key {
         let mut bytes = [0u8; 32];
