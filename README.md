@@ -4,6 +4,8 @@ SKI
 _A modern library and standard for "good enough" encryption, designed with
 embedded devices and hardware-constrained environments in mind._
 
+Frugal performance is no excuse for bad security!
+
 Although the interface is rather different (I'd like to think: streamlined),
 the standard and the reference implementation are designed to operate and
 "feel" much like GnuPG, and can, in theory, be used for many of the same tasks.

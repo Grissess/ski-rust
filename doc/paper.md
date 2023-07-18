@@ -153,10 +153,11 @@ entropy mix).
 Our reference implementation provides the "sym rand" command, which takes at
 least 56 bytes of state and uses it as the concatenation of a 256-bit key and
 192-bit nonce, as described above. It then encrypts an "initialization vector"
-of the same size as the state with the given key and nonce. The default vector,
-if none is given, consists of repeated 0x5A (01011010) bytes, which give a
+with the given key and nonce. The default vector, if none is given, consists of
+repeated 0x5A (01011010) bytes of the same size as the state, which give a
 balanced mix of set and clear bits. The resulting ciphertext, with the same
-size as the state, is written out as the new state.
+size as the IV, is written out as the new state; it will be the same size
+exactly when the IV is the same size (as it is by default).
 
 Implementations should mix entropy into the first 56 bytes of the state
 periodically, whenever a suitably "unexpected" event occurs--such as due to
@@ -167,7 +168,9 @@ state is ever disclosed. Implementations should avoid disclosing their state,
 including leaking more than the minimum required number of bits of its value.
 This can be mitigated by regular entropy mixing, although a high-quality,
 high-bandwidth entropy source obviates the need to use a cipher as a CSPRNG in
-the first place.
+the first place. However, even general-purpose computers tend not to have a
+high-bandwidth source as part of their design, so a CSPRNG tends to strike a
+good balance, and is usually provided as an operating system service.
 
 While not a guarantee of security, we note that the Linux kernel also uses
 Bernstein's ChaCha20 cipher as its CSPRNG (T'so 2016--commit e192be9), and this
@@ -272,7 +275,10 @@ given time. (An active attacker can easily create a total DoS by preventing
 communication in the first place.) Scrambling recipient keys requires a trusted
 entropy source, however; our recommendation is to use a high-quality randomness
 API if one is available on the host, or otherwise to use the symmetric cipher
-as a CSPRNG, as above, with the caveats as mentioned.
+as a CSPRNG, as above, with the caveats as mentioned. We believe protocols
+should be resilient to uniformly-random errors in delivery anyway; even absent
+an active attacker, tenuous networks and pesky physics can interfere with
+operation as usual, and so must be accounted for in any robust system.
 
 Since the MIC feature of "enmw" packets can be considered useful even with only
 two parties, our "encrypt" command accepts a "-m" or "--multiway" option that
@@ -356,6 +362,13 @@ a stream cipher mitigates the effects of padding-oracle attacks. Note, however,
 that other protocol-specific oracles may be possible due to the malleability of
 the stream cipher, and thus we encourage authenticating encrypted data (using
 any above scheme) unless a compelling reason justifies otherwise.
+
+It is worth note that signing a datum (and publishing the signature) prevents
+repudiability. If this is important, Encrypt-then-MAC is unsuitable. In the
+extreme, if repudiability and deniability are critical, the "multiway" MIC
+discussed above may suffice, depending on the application, although it does not
+give even recipient parties a way to verify the original sender as the above
+schemes do.
 
 
 
