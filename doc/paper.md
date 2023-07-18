@@ -252,12 +252,17 @@ our reference implementation, "decrypt" can fail if no shared key formed from
 the one private key and any given public key suffices to decrypt a message
 matching the MIC. This offers some form of "authenticated" encryption, though
 not as strong an attestation as a signature, because a signature certifies that
-a _certain_ public key was used, whereas our implementation permits _any_
-public key to suffice. Nonetheless, this MIC provides some tamper-resistance,
-in that decryption by any party will fail (up to hash collision) if the MIC or
-data packets are modified. Since the session key packets precede this, an
-active attacker can cause any single party to be unable to decrypt the message
-by tampering with their session key packet; however, because the only way to
+a _certain_ public key was used, whereas our implementation permits _any_ party
+to encrypt or otherwise communicate the session key--no guarantee of _binding_
+it to its original secret key is tendered by intent, as (1) this is instead the
+intent of signatures, below, and (2) this would allow active attacks based on
+the message recipients, discussed shortly. (Bernstein describes this as a
+"public-key authenticator", as opposed to a signature, in his documentation on
+(NaCL 2012).) Nonetheless, this MIC provides some tamper-resistance, in that
+decryption by any party will fail (up to hash collision) if the MIC or data
+packets are modified. Since the session key packets precede this, an active
+attacker can cause any single party to be unable to decrypt the message by
+tampering with their session key packet; however, because the only way to
 verify which shared key was used for each packet is by trial decryption, the
 attacker cannot determine (up to possessing a target's private key) which
 packet was intended for which recipient _a priori_. Thus, provided the order of
