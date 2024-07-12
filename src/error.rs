@@ -7,6 +7,7 @@ pub enum Error {
     BadEncoding(std::str::Utf8Error),
     SchemeTooLong(std::num::TryFromIntError),
     MissingArgument(String),
+    IndexOutOfRange(usize, usize),
     BadNonce([u8; 32]),
 }
 

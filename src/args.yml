@@ -16,6 +16,14 @@ subcommands:
             - FILE:
                 help: File to encode (default standard in)
                 index: 1
+    - rand:
+        about: Get random bytes from the underlying CSPRNG
+        args:
+            - AMOUNT:
+                help: How many bytes to get
+                takes_value: true
+                required: true
+                index: 1
     - key:
         about: Manipulate keys and en/decipher data
         subcommands:
@@ -51,12 +59,18 @@ subcommands:
                         required: true
                         index: 1
                     - PUBKEY:
-                        help: SKI public key URI
+                        help: SKI public key URIs
                         required: true
-                        index: 2
-                    - FILE:
+                        multiple: true
+                    - file:
+                        short: f
+                        long: file
                         help: Plaintext file to read (default standard in)
-                        index: 3
+                        takes_value: true
+                    - multiway:
+                        short: m
+                        long: multiway
+                        help: Even with only one keypair, encode multiway
             - decrypt:
                 about: Decrypt data with a key, writing the plaintext to stdout
                 args:
@@ -69,12 +83,19 @@ subcommands:
                         required: true
                         index: 1
                     - PUBKEY:
-                        help: SKI public key URI
+                        help: SKI public key URIs
                         required: true
-                        index: 2
-                    - FILE:
+                        multiple: true
+                    - file:
+                        short: f
+                        long: file
                         help: Ciphertext file to read (default standard in)
-                        index: 3
+                        takes_value: true
+                    - index:
+                        short: i
+                        long: index
+                        help: Index of session key in a multiway-encrypted datum
+                        takes_value: true
             - sign:
                 about: Sign data, writing a signature to stdout
                 args:
@@ -143,3 +164,16 @@ subcommands:
                     - FILE:
                         help: File to read (default stdin)
                         index: 2
+            - rand:
+                about: Generate the next random number using the cipher as a CSPRNG; needs at least 56 bytes (32 key, 24 nonce), further bytes are ignored
+                args:
+                    - iv:
+                        short: i
+                        long: iv
+                        help: Initialization vector (defaults to all 0x5a)
+                        takes_value: true
+                    - file:
+                        short: f
+                        long: file
+                        help: File to read (default stdin)
+                        takes_value: true

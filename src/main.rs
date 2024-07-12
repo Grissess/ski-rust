@@ -34,6 +34,19 @@ fn from_arg<T: Decodable, S: AsRef<str> + Clone>(args: &clap::ArgMatches, name: 
     )
 }
 
+fn from_args<T: Decodable, S: AsRef<str> + Clone>(args: &clap::ArgMatches, name: S) -> error::Result<Vec<T>> where String: From<S> {
+    match args.values_of(name.clone()) {
+        None => Ok(vec![]),
+        Some(values) => {
+            let mut result = Vec::new();
+            for v in values {
+                result.push(T::decode(&CodedObject::from_urn(v)?)?);
+            }
+            Ok(result)
+        },
+    }
+}
+
 fn main() {
     let arg_config = load_yaml!("args.yml");
     let matches = clap::App::from_yaml(arg_config).get_matches();
@@ -50,6 +63,15 @@ fn main() {
             io::stdout().write_all(&coding::decode(buffer).unwrap()).unwrap();
             0
         },
+
+        ("rand", Some(args)) => {
+            let bytes: usize = args.value_of("AMOUNT").unwrap().parse().unwrap();
+            let mut result: Vec<u8> = Vec::with_capacity(bytes);
+            result.extend(std::iter::repeat(0u8).take(bytes));
+            csrng::fill_random(&mut result[..]);
+            io::stdout().write_all(&result[..]).unwrap();
+            0
+        }
 
         ("key", Some(args)) => {
             match args.subcommand() {
@@ -77,17 +99,23 @@ fn main() {
 
                 ("encrypt", Some(args)) => {
                     let privkey: key::Key = from_arg(args, "PRIVKEY").unwrap();
-                    let pubkey: key::PubKey = from_arg(args, "PUBKEY").unwrap();
+                    let pubkeys: Vec<key::PubKey> = from_args(args, "PUBKEY").unwrap();
 
-                    let buffer = read_all_input(args.value_of_os("FILE")).unwrap();
+                    let buffer = read_all_input(args.value_of_os("file")).unwrap();
 
-                    let session = data::Session::from_keys(&privkey, &pubkey);
+                    let session = data::Session::from_keys_multiway(&privkey, &pubkeys);
                     let ciphertext = session.encrypt(&buffer);
 
-                    let output = if args.is_present("ascii") {
-                        ciphertext.encode().as_urn().into_bytes()
+                    let object = if args.is_present("multiway") {
+                        data::encode_multiway(&ciphertext)
                     } else {
-                        ciphertext.encode().as_binary().unwrap()
+                        ciphertext.encode()
+                    };
+
+                    let output = if args.is_present("ascii") {
+                        object.as_urn().into_bytes()
+                    } else {
+                        object.as_binary().unwrap()
                     };
                     io::stdout().write_all(&output).unwrap();
                     0
@@ -95,11 +123,11 @@ fn main() {
 
                 ("decrypt", Some(args)) => {
                     let privkey: key::Key = from_arg(args, "PRIVKEY").unwrap();
-                    let pubkey: key::PubKey = from_arg(args, "PUBKEY").unwrap();
+                    let pubkeys: Vec<key::PubKey> = from_args(args, "PUBKEY").unwrap();
 
-                    let buffer = read_all_input(args.value_of_os("FILE")).unwrap();
+                    let buffer = read_all_input(args.value_of_os("file")).unwrap();
 
-                    let session = data::Session::from_keys(&privkey, &pubkey);
+                    let session = data::Session::from_keys_multiway(&privkey, &pubkeys);
                     let cipher = if args.is_present("ascii") {
                         CodedObject::from_urn(std::str::from_utf8(&buffer).unwrap()).unwrap()
                     } else {
@@ -107,7 +135,18 @@ fn main() {
                     };
                     let cipher = data::EncryptedData::decode(&cipher).unwrap();
 
-                    io::stdout().write_all(&session.decrypt(&cipher)).unwrap();
+                    let data = if args.is_present("index") {
+                        let index: usize = args.value_of("index").unwrap().parse().unwrap();
+                        let len = session.len_of(&cipher);
+                        if index >= len {
+                            Err::<(), _>(error::Error::IndexOutOfRange(index, len)).unwrap();
+                        }
+                        session.decrypt_index(&cipher, index).expect("no shared key found")
+                    } else {
+                        session.decrypt(&cipher).expect("no shared key found")
+                    };
+
+                    io::stdout().write_all(&data).unwrap();
                     0
                 },
 
@@ -213,6 +252,28 @@ fn main() {
                     let plain = cipher.decipher(&data);
                     io::stdout().write_all(&plain).unwrap();
                     0
+                },
+
+                ("rand", Some(args)) => {
+                    let input = read_all_input(args.value_of_os("file")).unwrap();
+                    let needed_bytes = sym::Key::SIZE + sym::Key::NONCE;
+                    if input.len() < needed_bytes {
+                        panic!("need at least {} bytes of previous state", needed_bytes);
+                    }
+                    let iv: Vec<u8> = if args.is_present("iv") {
+                        args.value_of("iv").unwrap().as_bytes().into()
+                    } else {
+                        std::iter::repeat(0x5au8).take(input.len()).collect()
+                    };
+                    let mut key = sym::Key { bytes: [0u8; sym::Key::SIZE] };
+                    key.bytes.copy_from_slice(&input[.. sym::Key::SIZE]);
+                    let mut nonce = [0u8; sym::Key::NONCE];
+                    nonce.copy_from_slice(&input[sym::Key::SIZE .. needed_bytes]);
+                    let cipher = key.cipher_with_nonce(nonce);
+                    let state = cipher.encipher(&iv);
+                    io::stdout().write_all(&state.data).unwrap();
+                    0
+
                 },
 
                 _ => {

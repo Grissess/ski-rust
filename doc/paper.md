@@ -92,7 +92,7 @@ coding standard is flexible enough to admit a self-describing packet.
 Symmetric Encryption
 ====================
 
-Arguably the easiest form of encryption, symmetric encryption depends on a
+Arguably the simplest form of encryption, symmetric encryption depends on a
 shared secret, referred to as a "symmetric key", or simply a key. A symmetric
 cipher is two operations, encryption and decryption, which take some amount of
 data and such a key, and for which encryption composed with decryption only
@@ -136,6 +136,46 @@ command:
   the inverse done with the "decrypt" command, both of which expect a symmetric
   key. Both use the binary encoding of the "syed" scheme by default, but can be
   given an argument to generate a URN instead.
+
+
+
+As an Entropy Source
+--------------------
+
+A suitable cipher can be used as a CSPRNG, given an initial entropic state.
+This relies on the cipher's resistance to key discovery to prevent an
+observation of current states from entailing previous states. If no further
+entropy is mixed into the state, however, care must be taken to never disclose
+all, or nearly all (up to practical brute force), of the bits of state, as the
+CSPRNG's subsequent states can be easily determined (at least until the next
+entropy mix).
+
+Our reference implementation provides the "sym rand" command, which takes at
+least 56 bytes of state and uses it as the concatenation of a 256-bit key and
+192-bit nonce, as described above. It then encrypts an "initialization vector"
+with the given key and nonce. The default vector, if none is given, consists of
+repeated 0x5A (01011010) bytes of the same size as the state, which give a
+balanced mix of set and clear bits. The resulting ciphertext, with the same
+size as the IV, is written out as the new state; it will be the same size
+exactly when the IV is the same size (as it is by default).
+
+Implementations should mix entropy into the first 56 bytes of the state
+periodically, whenever a suitably "unexpected" event occurs--such as due to
+user input, network jitter, or physically random events such as disk seeks. The
+entire set of entropic sources and their quality is beyond the scope of this
+paper, but any amount of mixing will restore non-determinism if the current
+state is ever disclosed. Implementations should avoid disclosing their state,
+including leaking more than the minimum required number of bits of its value.
+This can be mitigated by regular entropy mixing, although a high-quality,
+high-bandwidth entropy source obviates the need to use a cipher as a CSPRNG in
+the first place. However, even general-purpose computers tend not to have a
+high-bandwidth source as part of their design, so a CSPRNG tends to strike a
+good balance, and is usually provided as an operating system service.
+
+While not a guarantee of security, we note that the Linux kernel also uses
+Bernstein's ChaCha20 cipher as its CSPRNG (T'so 2016--commit e192be9), and this
+gives us at least some confidence in the cipher's use for this purpose, if not
+the design of this interface.
 
 
 
@@ -194,14 +234,55 @@ encrypted with the message key. Under the "key" command:
   it is provided as a diagnostic aid, and for integration with other systems.
 
 - Ciphertext can be produced from plaintext with "encrypt", and the inverse
-  done with "decrypt". Both operations require a public key (usually the
-  "recipient") and a private key (usually the "sender"). "decrypt" can recover
-  using either the original private and public key, or (more typically) the
-  private key of the recipient and the public key of the sender.
+  done with "decrypt". Both operations require some public keys (usually the
+  "recipients") and a private key (usually the "sender"). "decrypt" can recover
+  using either the original private and any public key, or (more typically) the
+  private key of any recipient and the public key of the sender.
 
-Future work includes extending the number of public keys to which a single
-message can be addressed, as it requires only constant size (the size of one
-encrypted message key) to add further recipients by public key.
+For "multiway" encryption, with multiple recipients, the format is extended to
+the "ski:enmw" scheme, which consists of up to 255 "syed" packets, each
+encrypted with a pairwise shared key between a single private key and one of
+the public keys, a "syed" packet containing a message integrity code (MIC),
+which presently consists of an encrypted hash of the same variety used in
+signatures (see below), and a "syed" packet containing the encrypted data. The
+MIC and data are encrypted with the same per-message "session" key; we believe
+that an anomalously successful decryption is no higher a risk than that of a
+hash collision of the underlying algorithm. Unlike the signature tokens
+described below, the full size of the hash function is encrypted.
+
+Because of the MIC, failure to decrypt data is a detectable circumstance. In
+our reference implementation, "decrypt" can fail if no shared key formed from
+the one private key and any given public key suffices to decrypt a message
+matching the MIC. This offers some form of "authenticated" encryption, though
+not as strong an attestation as a signature, because a signature certifies that
+a _certain_ public key was used, whereas our implementation permits _any_ party
+to encrypt or otherwise communicate the session key--no guarantee of _binding_
+it to its original secret key is tendered by intent, as (1) this is instead the
+intent of signatures, below, and (2) this would allow active attacks based on
+the message recipients, discussed shortly. (Bernstein describes this as a
+"public-key authenticator", as opposed to a signature, in his documentation on
+(NaCL 2012).) Nonetheless, this MIC provides some tamper-resistance, in that
+decryption by any party will fail (up to hash collision) if the MIC or data
+packets are modified. Since the session key packets precede this, an active
+attacker can cause any single party to be unable to decrypt the message by
+tampering with their session key packet; however, because the only way to
+verify which shared key was used for each packet is by trial decryption, the
+attacker cannot determine (up to possessing a target's private key) which
+packet was intended for which recipient _a priori_. Thus, provided the order of
+session keys are randomized uniformly ("scrambled"), a targeted DoS by an
+active attacker can only affect a uniformly-random set of recipients at any
+given time. (An active attacker can easily create a total DoS by preventing
+communication in the first place.) Scrambling recipient keys requires a trusted
+entropy source, however; our recommendation is to use a high-quality randomness
+API if one is available on the host, or otherwise to use the symmetric cipher
+as a CSPRNG, as above, with the caveats as mentioned. We believe protocols
+should be resilient to uniformly-random errors in delivery anyway; even absent
+an active attacker, tenuous networks and pesky physics can interfere with
+operation as usual, and so must be accounted for in any robust system.
+
+Since the MIC feature of "enmw" packets can be considered useful even with only
+two parties, our "encrypt" command accepts a "-m" or "--multiway" option that
+forces this behavior.
 
 
 
@@ -281,6 +362,13 @@ a stream cipher mitigates the effects of padding-oracle attacks. Note, however,
 that other protocol-specific oracles may be possible due to the malleability of
 the stream cipher, and thus we encourage authenticating encrypted data (using
 any above scheme) unless a compelling reason justifies otherwise.
+
+It is worth note that signing a datum (and publishing the signature) prevents
+repudiability. If this is important, Encrypt-then-MAC is unsuitable. In the
+extreme, if repudiability and deniability are critical, the "multiway" MIC
+discussed above may suffice, depending on the application, although it does not
+give even recipient parties a way to verify the original sender as the above
+schemes do.
 
 
 

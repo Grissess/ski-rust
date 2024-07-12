@@ -6,7 +6,6 @@ version = "0.2.0"
 authors = ["Graham Northup <grissess@nexusg.org>"]
 edition = "2018"
 license = "CC0-1.0"
-license-file = "COPYING"
 repository = "https://github.com/Grissess/ski-rust/"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
