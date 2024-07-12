@@ -1,15 +1,15 @@
-pub const ENCODING: base64::Config = base64::URL_SAFE;
+pub const ENCODING: base64::engine::general_purpose::GeneralPurpose = base64::engine::general_purpose::URL_SAFE;
 
 use crate::error::{self, Error};
 
 use std::convert::TryFrom;
 
 pub fn encode<T: AsRef<[u8]>>(bytes: T) -> String {
-    base64::encode_config(bytes, ENCODING)
+    base64::encode(bytes)
 }
 
 pub fn decode<T: AsRef<[u8]>>(bytes: T) -> error::Result<Vec<u8>> {
-    base64::decode_config(bytes, ENCODING).map_err(Into::into)
+    base64::decode(bytes).map_err(Into::into)
 }
 
 pub struct CodedObject {

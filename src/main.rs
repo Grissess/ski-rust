@@ -171,7 +171,7 @@ fn main() {
                 },
 
                 ("derive", Some(_args)) => {
-                    let pass = rpassword::prompt_password_stderr("Password: ").unwrap();
+                    let pass = rpassword::prompt_password("Password: ").unwrap();
                     let hasher = kdf::KeyDerivation::new();
                     let mut output = [0u8; sym::Key::SIZE];
                     hasher.hash(pass.as_bytes(), &mut output);
